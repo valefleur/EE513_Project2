@@ -1,0 +1,58 @@
+# EE 513 Image Formation and Computational Imaging, Fall 2026.
+#
+# The two files students download from Canvas. See README.md.
+#
+#   uv sync                      week 1. Core environment, 119 packages, ~643 MB.
+#   uv sync --group learning     week 6. Adds PyTorch, the ONNX tools and gradio,
+#                                164 packages, ~1.5 GB total.
+#
+# From week 6 onward the --group flag is part of the command. A bare `uv sync`
+# makes the environment match the core set exactly, which means it REMOVES
+# torch. That is uv working correctly, not a bug.
+
+[project]
+name = "ee513"
+version = "2026.1"
+description = "EE 513 Image Formation and Computational Imaging, Fall 2026"
+requires-python = "==3.12.*"
+
+# Everything needed from week 1 through the Exam 1 material.
+dependencies = [
+  "numpy>=2.1",
+  "scipy>=1.14",
+  "matplotlib>=3.9",
+  "pandas>=2.2",
+  "tqdm>=4.66",
+  "opencv-contrib-python>=5.0",
+  "scikit-image>=0.24",
+  "imageio>=2.35",
+  "tifffile>=2024.8.30",
+  "pillow>=10.4",
+  "rawpy>=0.23",
+  "colour-science>=0.4.4",
+  "bm3d>=4.0",            # lecture 10's reference denoiser, used by both demo notebooks
+  "jupyterlab>=4.2",
+  "ipykernel>=6.29",
+  "ipywidgets>=8.1",
+  "pytest>=8.3",
+]
+
+# Deferred to week 6, when lecture 11 introduces PyTorch. Held back because it
+# is 812 MB and 45 packages that nothing before lecture 11 imports, and on Linux
+# it pulls the CUDA build of torch, which is far larger still. Week 1 is when
+# students are most likely to get stuck, so it carries the least possible load.
+[dependency-groups]
+learning = [
+  "torch>=2.8",
+  "torchvision>=0.23",
+  "torchmetrics>=1.4",  # SSIM and LPIPS for the Project 2 denoising comparison
+  "onnx>=1.17",         # the ONNX format itself, which torch.onnx.export writes
+  "onnxscript>=0.2",    # torch.onnx.export imports this; without it the export fails
+  "onnxruntime>=1.19",  # running the exported model outside PyTorch, Project 2 Part C
+  "gradio>=5.0",        # demo front ends for the Project 2 and 3 deliverables
+]
+
+[tool.uv]
+package = false
+# Without this, uv installs every group by default and the split does nothing.
+default-groups = []
