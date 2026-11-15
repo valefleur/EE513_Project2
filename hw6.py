@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
+from scipy import ndimage
 
 INPUT_PATH = "images/iPhone16/Lightroom/"
 OUTPUT_PATH = "output/hw6/"
@@ -97,7 +98,8 @@ if __name__ == "__main__":
     # Add a dimension of length 1 to represent the batch.
     tensor = t.unsqueeze(0) # (1, C, H, W) float32
     print(f"unsqueeze  shape [{tensor.shape}] and type [{tensor.dtype}].")
-
+    #make a copy of tensor to use later
+    tensor_copy = tensor.clone()
 
     # Problem 3
     problem = 3
@@ -223,3 +225,71 @@ if __name__ == "__main__":
     It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.
     '''
     print(f"It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.  The initial loss starts high, drops as the learning rate increases, and then climbs again as the learning rate gets too high.")
+
+
+    # Problem 8
+    problem = 8
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    sigma = 1.0
+    kernel_size = 5
+    half = kernel_size // 2
+    kernel_axis = np.arange(-half, half + 1)                # [-2, -1, 0, 1, 2]
+    gaussian_1D = np.exp(-kernel_axis**2 / (2 * sigma**2))  # 1D Gaussian
+    kernel = np.outer(gaussian_1D, gaussian_1D)             # 2D is outer product of 1D
+    kernel /= kernel.sum()                                  # Normalize to maintain overall brightness
+    print(f"Kernel shape [{kernel.shape}] and total weight [{kernel.sum()}].")
+
+    conv = torch.nn.Conv2d(in_channels=3,
+                           out_channels=3,
+                           kernel_size=kernel_size,
+                           padding=half,
+                           padding_mode='reflect',
+                           groups=3,
+                           bias=False)
+
+    k = torch.tensor(kernel, dtype=torch.float32)
+    # Question: How do I know when something needs to be turned into a tensor?
+    # Answer: When you need to perform operations that are specific to PyTorch tensors, such as matrix multiplication, gradient computation, or using PyTorch's built-in functions.
+    # Question: I guess I'm not quite following how PyTorch organizes the problem space.
+
+    with torch.no_grad():
+        # Without copy_(), the weights would be random and we would be using an unitialized kernel.
+        # With copy_(), we are explicitly setting the weights to our Gaussian kernel.
+        conv.weight.copy_(k.expand(3, 1, kernel_size, kernel_size))  # (out_channels, in_channels/groups, H, W), same kernel for each channel
+    conv.weight.requires_grad_(False)  # We don't want to learn the kernel, just use it as is
+    print(f"Conv2d weight shape [{conv.weight.shape}] and requires_grad [{conv.weight.requires_grad}].")
+
+    with torch.no_grad():
+        filtered_tensor = conv(tensor_copy)  # (1, C, H, W)
+    print(f"Filtered tensor shape [{filtered_tensor.shape}].")
+
+    out_tensor = filtered_tensor.squeeze(0).permute(1, 2, 0).numpy()  # (1, C, H, W) -> (C, H, W) -> (H, W, C)
+
+    fig, ax = plt.subplots()
+    ax.imshow(out_tensor)
+    ax.set_title("PyTorch Filtered Image")
+    if SHOW:
+        plt.show()
+    fig.savefig(f"{OUTPUT_PATH}p{problem:2f}_guassian_filtered_image.png")
+    plt.close(fig)
+
+    # img from problem 2 as float32 scaled to 0-1
+    img_float32 = img.astype(np.float32) / 255.0
+    out_scipy = ndimage.correlate(img_float32.astype(np.float64),
+                                  kernel[:, :, None],   # (5, 5, 1): don't mix across channels
+                                  mode='mirror')        # matches the reflect padding used in PyTorch Conv2d
+
+    print(f"Scipy filtered image shape [{out_scipy.shape}] and type [{out_scipy.dtype}].")
+
+    # Plot the Scipy filtered image
+    fig, ax = plt.subplots()
+    ax.imshow(out_scipy)
+    ax.set_title("Scipy Filtered Image")
+    if SHOW:
+        plt.show()
+    fig.savefig(f"{OUTPUT_PATH}p{problem:2f}_scipy_gaussian_filtered_image.png")
+    plt.close(fig)
+
+    max_diff = np.abs(out_tensor - out_scipy).max()
+    print(f"Max difference between PyTorch and Scipy filtered images: {max_diff:.12f}")
+    print(f"float32 eps: {np.finfo(np.float32).eps:.6e}, float64 eps: {np.finfo(np.float64).eps:.6e}")
