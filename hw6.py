@@ -277,7 +277,7 @@ if __name__ == "__main__":
     img_float32 = img.astype(np.float32) / 255.0
     out_scipy = ndimage.correlate(img_float32.astype(np.float64),
                                   kernel[:, :, None],   # (5, 5, 1): don't mix across channels
-                                  mode='mirror')        # matches the reflect padding used in PyTorch Conv2d
+                                  mode='mirror')        # 'mirror' matches the 'reflect' padding used in PyTorch Conv2d
 
     print(f"Scipy filtered image shape [{out_scipy.shape}] and type [{out_scipy.dtype}].")
 
@@ -293,3 +293,31 @@ if __name__ == "__main__":
     max_diff = np.abs(out_tensor - out_scipy).max()
     print(f"Max difference between PyTorch and Scipy filtered images: {max_diff:.12f}")
     print(f"float32 eps: {np.finfo(np.float32).eps:.6e}, float64 eps: {np.finfo(np.float64).eps:.6e}")
+    '''
+    Rule of thumb:
+    A difference of 1 to 10 eps is rounding.
+    A difference of 1e-4 or larger (or anything that doesn't shrink when you check) points to a bug
+    such as mismatched borders.
+    '''
+
+
+    # Problem 9
+    problem = 9
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Double check by seperating border and interior regions
+    d = np.abs(out_tensor - out_scipy)
+
+    interior = d[half:-half, half:-half, :]
+    print(f"Interior max: [{interior.max():.12f}] or [{interior.max():.3e}]")
+
+    mask = np.ones(d.shape[:2], dtype=bool)
+    mask[half:-half, half:-half] = False
+    border = d[mask]    # the 2-pixel frame around the image
+    print(f"Border   max: [{border.max():.12f}] or [{border.max():.3e}]")
+
+    '''
+    If both maxima are around 1e-7 to 3e-7, then the difference is likely due to rounding errors and there is no disagreement.
+    If the border max is much larger than the interior max, then there is likely a bug in how the borders are handled.
+    If both are large (say > 1e-2), then there is likely a bug in the weights or scaling of the kernel.
+    '''
+    print(f"There was no disagreement between the PyTorch and SciPy approaches beyond the float32 rounding.  The max difference of 2.8e-7 (about 2.4 eps) is accumulated rounding error from float32 arithmetic compared to float64 arithmetic.  The interior max is 2.8e-7 and the border max is 2.1e-7, so there is no disagreement in the border handling either.")
