@@ -3,11 +3,52 @@ import rawpy as raw
 import numpy as np
 import cv2
 from PIL import Image
+import matplotlib.pyplot as plt
+
+INPUT_PATH = "images/iPhone16/Lightroom/"
+OUTPUT_PATH = "output/hw6/"
+
+SHOW = False
+
+def get_torch_afine_gradient(x, y, learning_rate=0.01, iterations=5000):
+    # Initial guesses for slope and intercept
+    m = torch.tensor(0.0, requires_grad=True) # slope
+    b = torch.tensor(0.0, requires_grad=True) # intercept
+
+    # the PyTorch optimizer takes an iterable list/array of the tensors (or dicts) to optimize over
+    optimizer = torch.optim.SGD([m, b], lr=learning_rate)
+
+    losses = []
+    # Loop for a while; no stop criteria
+    for iteration in range(5000):
+        optimizer.zero_grad()   # clear old gradients that accumulate across backward() calls
+        prediction = m*x + b    # the forward pass
+        loss = ((prediction - y)**2).mean() # MSE here, could be another loss function
+        losses.append(loss.item())
+        # if iteration % 500 == 0:
+        #     print(f"Iteration [{iteration:4d}] loss [{loss.item():.3f}] slope [{m.item():.3f}] intercept [{b.item():.3f}].")
+        loss.backward()         # calculate gradients for this step
+        optimizer.step()        # Perform optimization and update the variables we are optimizing over, i.e. m and b
+    losses = np.array(losses)
+    return m, b, losses
+
+
+def plot_losses(losses, problem, rate):
+    fig, ax = plt.subplots()
+    ax.plot(losses)
+    ax.loglog()
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Loss")
+    ax.set_title(f"Training Loss (lr={rate:.3f})")
+    if SHOW:
+        plt.show()
+    fig.savefig(f"{OUTPUT_PATH}p{problem:2f}_training_loss_lr_{rate:.3f}.png")
+    plt.close(fig)
+
 
 if __name__ == "__main__":
 
-    iphone_images = "images/iPhone16/Lightroom/"
-    image_path = f"{iphone_images}hw2_slanted/Nov_08/set3/center_501mm/APC_0658.dng"
+    image_path = f"{INPUT_PATH}hw2_slanted/Nov_08/set3/center_501mm/APC_0658.dng"
 
     # Problem 1
     problem = 1
@@ -136,23 +177,7 @@ if __name__ == "__main__":
     x = torch.tensor(x_vals, dtype=torch.float32)
     y = torch.tensor(noisy_line, dtype=torch.float32)
 
-    # Initial guesses for slope and intercept
-    m = torch.tensor(0.0, requires_grad=True) # slope
-    b = torch.tensor(0.0, requires_grad=True) # intercept
-
-    # the PyTorch optimizer takes an iterable list/array of the tensors (or dicts) to optimize over
-    optimizer = torch.optim.SGD([m, b], lr=0.001)
-
-    losses = []
-    # Loop for a while; no stop criteria
-    for iteration in range(5000):
-        optimizer.zero_grad()   # clear old gradients that accumulate across backward() calls
-        prediction = m*x + b    # the forward pass
-        loss = ((prediction - y)**2).mean() # MSE here, could be another loss function
-        losses.append(loss)
-        loss.backward()         # calculate gradients for this step
-        optimizer.step()        # Perform optimization and update the variables we are optimizing over, i.e. m and b
-
+    m, b, losses = get_torch_afine_gradient(x, y, learning_rate=0.001, iterations=5000)
     print(f"PyTorch gradient decent slope [{m.item():.3f}] and intercept [{b.item():.3f}].")
 
     ## Least Squares
@@ -164,3 +189,37 @@ if __name__ == "__main__":
     slope_diff = m.item() - solution[0]
     intercept_diff = b.item() - solution[1]
     print(f"Difference in slope:\t  {slope_diff:.3f}\nDifference in intercept: {intercept_diff:.3f}")
+
+
+    # Problem 6
+    problem = 6
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Plot the loss against iteration for that fit.
+    plot_losses(losses, problem, 0.001)
+
+
+    # Problem 7
+    problem = 7
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Raise the learning rate until the fit stops converging, and say what the loss curve does when it fails.
+    learning_rates = np.linspace(0.001, 0.01, num=10)
+    loss_per_rate = []
+    for rate in learning_rates:
+        m, b, losses = get_torch_afine_gradient(x, y, learning_rate=rate, iterations=5000)
+        plot_losses(losses, problem, rate)
+        print(f"Learning rate [{rate:.3f}] final slope [{m.item():.3f}] and intercept [{b.item():.3f}].")
+        loss_per_rate.append(losses[-1])
+
+    # plot loss curve vs learning rate
+    fig, ax = plt.subplots()
+    ax.plot(learning_rates, loss_per_rate)
+    ax.set_xlabel("Learning Rate")
+    ax.set_ylabel("Final Loss")
+    ax.set_title(f"Final Loss vs Learning Rate")
+    if SHOW:
+        plt.show()
+    plt.close(fig)
+    '''
+    It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.
+    '''
+    print(f"It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.  The initial loss starts high, drops as the learning rate increases, and then climbs again as the learning rate gets too high.")
