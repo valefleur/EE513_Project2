@@ -11,7 +11,7 @@ if __name__ == "__main__":
 
     # Problem 1
     problem = 1
-    print(f"*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     print(f"PyTorch Version: {torch.__version__}")
 
     # Hardcode platform for now
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     # Problem 2
     problem = 2
-    print(f"*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     # TODO turn this into a function that takes an image path and returns
     # the tensor and/or np representation for use
 
@@ -60,7 +60,7 @@ if __name__ == "__main__":
 
     # Problem 3
     problem = 3
-    print(f"*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     # Convert tensor back to a NumPy array and assert it equals img
     tensor.squeeze_(0)  # (C, H, W)
     print(f"re-squeezed\t   shape [{tensor.shape}] and type [{tensor.dtype}].")
@@ -77,3 +77,90 @@ if __name__ == "__main__":
 
     print(f"The original NumPy array {'equals' if np.array_equal(numpy_arr, img) else 'does not equal'} the restored Numpy array.")
     assert np.array_equal(numpy_arr, img), "The original and the restored NumPy arrays are different!"
+
+
+    # Problem 4
+    problem = 4
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+
+    # Evaluate the derivative at a point in a one-variable scalar function using autograd
+    # and compare the difference
+    '''
+    Function:
+    f(x) = 9x^3 + 8x^2 + 4x + 1
+    Evaluate the gradient at x = 2.
+
+    d/dx = 27x^2 + 16x + 4
+
+    d/dx(2) = 27(2)^2 + 16(2) + 4 = 144
+    '''
+    at = 2.0
+    x = torch.tensor(at, requires_grad=True)
+
+    y = 9*x**3 + 8*x**2 +4*x + 1
+
+    # Compute the derivative using backpropagation
+    y.backward()
+
+    hand_derived = 27*at**2 + 16*at + 4
+    torch_gradient = x.grad.item()
+
+    print(f"f({at}) = {hand_derived} by hand.")
+    # print(f"The same function using backpropagation gave {y.item()}.")
+    print(f"f({at}) = {torch_gradient} by PyTorch gradient.")
+
+    diff = abs(torch_gradient - hand_derived)
+    print(f"Difference: {diff}")
+    assert diff < 1e-6
+
+
+    # Problem 5
+    problem = 5
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+
+    slope = 2.0
+    bias = 3.0
+    print(f"Reality:\t\tslope [{slope:.3f}] and intercept [{bias:.3f}].")
+    rnd = np.random.default_rng(55)
+    noise = rnd.normal(loc=0, scale=1.0, size=20)
+
+    x_vals = np.arange(0, 20, dtype=float)
+    clean_line = x_vals*slope + bias
+    noisy_line = clean_line + noise
+
+    # print(f"clean_line shape: {clean_line.shape}, max {clean_line.max():.3f}, mean {clean_line.mean():.3f}")
+    # print(f"noisy_line shape: {noisy_line.shape}, max {noisy_line.max():.3f}, mean {noisy_line.mean():.3f}")
+
+    ## PyTorch loop
+    # y = mx + b
+    x = torch.tensor(x_vals, dtype=torch.float32)
+    y = torch.tensor(noisy_line, dtype=torch.float32)
+
+    # Initial guesses for slope and intercept
+    m = torch.tensor(0.0, requires_grad=True) # slope
+    b = torch.tensor(0.0, requires_grad=True) # intercept
+
+    # the PyTorch optimizer takes an iterable list/array of the tensors (or dicts) to optimize over
+    optimizer = torch.optim.SGD([m, b], lr=0.001)
+
+    losses = []
+    # Loop for a while; no stop criteria
+    for iteration in range(5000):
+        optimizer.zero_grad()   # clear old gradients that accumulate across backward() calls
+        prediction = m*x + b    # the forward pass
+        loss = ((prediction - y)**2).mean() # MSE here, could be another loss function
+        losses.append(loss)
+        loss.backward()         # calculate gradients for this step
+        optimizer.step()        # Perform optimization and update the variables we are optimizing over, i.e. m and b
+
+    print(f"PyTorch gradient decent slope [{m.item():.3f}] and intercept [{b.item():.3f}].")
+
+    ## Least Squares
+    # y = A * x
+    A = np.column_stack([x_vals, np.ones_like(x_vals)])
+    solution, residuals, rank, sv = np.linalg.lstsq(A, noisy_line, rcond=None)
+    print(f"The Least Squares found slope [{solution[0]:.3f}] and intercept [{solution[1]:.3f}].")
+
+    slope_diff = m.item() - solution[0]
+    intercept_diff = b.item() - solution[1]
+    print(f"Difference in slope:\t  {slope_diff:.3f}\nDifference in intercept: {intercept_diff:.3f}")
