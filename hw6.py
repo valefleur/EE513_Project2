@@ -6,6 +6,7 @@ import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
 from scipy import ndimage
+from skimage.metrics import peak_signal_noise_ratio
 
 INPUT_PATH = "images/iPhone16/Lightroom/"
 OUTPUT_PATH = "output/hw6/"
@@ -471,7 +472,7 @@ if __name__ == "__main__":
 
     # Use the first_cnn_denoiser to predict the clean image given the noisy one.
     denoiser = SmallDenoiser(in_ch=3, out_ch=3, maps=16)
-    if 0:
+    if 1:
         # Use the Adam optimizer for training the denoiser.
         optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-3)
     else:
@@ -494,8 +495,8 @@ if __name__ == "__main__":
     losses = []
     for iteration in range(1000):
         optimizer.zero_grad()
-        denoised = denoiser(noisy_tensor)
-        loss = mse_loss(denoised, clean_crop)
+        training_output = denoiser(noisy_tensor)
+        loss = mse_loss(training_output, clean_crop)
         losses.append(loss.item())
         loss.backward()
         optimizer.step()
@@ -510,3 +511,58 @@ if __name__ == "__main__":
     fig.tight_layout()
     fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_denoiser_training_loss.png")
     plt.close(fig)
+
+
+    # Problem 12
+    problem = 12
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # PSNR of the noisy image and the denoised image
+    PEAK = 1.0  # since we scaled the image to [0,1]
+
+    def psnr_from_mse(mse, peak=PEAK):
+        return 10 * np.log10(peak**2 / mse)
+
+    def to_hwc(t):      # # (1, C, H, W) tensor to (H, W, C) numpy array for imshow
+        return t.detach().squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+    def plot_comparison(clean, denoised, noisy, psnr_denoised, psnr_noisy, path, peak=PEAK):
+        panels = [("Clean (reference)", clean, None),
+                  (f"Denoised", denoised, psnr_denoised),
+                  (f"Noisy", noisy, psnr_noisy)]
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5), layout="constrained")
+        for k, (ax, (name, img, db)) in enumerate(zip(axes, panels)):
+            ax.imshow(np.clip(img, 0, 1), interpolation="none")
+            ax.xaxis.tick_top()
+            ax.xaxis.set_label_position("top")
+            ax.set_xlabel("Column (pixels)")
+            if k == 0:
+                ax.set_ylabel("Row (pixels)")
+            else:
+                ax.set_yticklabels([])
+            ax.set_title(name if db is None else f"{name}\nPSNR = {db:.2f} dB (peak {peak:g})")
+        fig.savefig(path, bbox_inches="tight", pad_inches=0.15)
+        plt.close(fig)
+
+    denoiser.eval()  # set the model to evaluation mode
+    with torch.no_grad():
+        denoised_tensor = denoiser(noisy_tensor)
+
+    # Clip to valid range first (like Professor McNames' psnr() function)
+    # and compare with the clean crop
+    noisy_clip = noisy_tensor.clamp(0,1)
+    denoised_clip = denoised_tensor.clamp(0,1)
+    psnr_noisy = psnr_from_mse(mse_loss(noisy_clip, clean_crop).item())
+    psnr_denoised = psnr_from_mse(mse_loss(denoised_clip, clean_crop).item())
+    print(f"Peak {PEAK}, clipped to [0, 1]: noisy {psnr_noisy:.2f} dB, denoised {psnr_denoised:.2f} db.")
+
+    # Cross-check against scikit-image's implementation
+    check = peak_signal_noise_ratio(to_hwc(clean_crop), to_hwc(denoised_clip), data_range=PEAK)
+    assert abs(check - psnr_denoised) < 1e-3, f"SciKit-Image's implementation of the PSNR gave {check} instead of {psnr_denoised} [diff: {check - psnr_denoised}]"
+
+    plot_comparison(to_hwc(clean_crop),
+                    to_hwc(denoised_clip),
+                    to_hwc(noisy_clip),
+                    psnr_denoised,
+                    psnr_noisy,
+                    f"{OUTPUT_PATH}p{problem:02d}_denoiser_comparison.png"
+                    )
