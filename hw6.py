@@ -1,5 +1,3 @@
-from pyclbr import Class
-
 import torch
 import torch.nn as nn
 import rawpy as raw
@@ -24,7 +22,7 @@ def get_torch_afine_gradient(x, y, learning_rate=0.01, iterations=5000):
 
     losses = []
     # Loop for a while; no stop criteria
-    for iteration in range(5000):
+    for iteration in range(iterations):
         optimizer.zero_grad()   # clear old gradients that accumulate across backward() calls
         prediction = m*x + b    # the forward pass
         loss = ((prediction - y)**2).mean() # MSE here, could be another loss function
@@ -48,6 +46,23 @@ def plot_losses(losses, problem, rate):
         plt.show()
     fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_training_loss_lr_{rate:.3f}.png")
     plt.close(fig)
+
+
+def gaussian_kernel(kernel_size=5, sigma=1.0):
+    '''
+    Returns a kernel of kernel_size representing a Gaussian blur with standard deviation sigma.
+    The kernel is normalized to sum to 1.
+    '''
+    half = kernel_size // 2
+    kernel_axis = np.arange(-half, half + 1)                # [-2, -1, 0, 1, 2]
+    gaussian_1D = np.exp(-kernel_axis**2 / (2 * sigma**2))  # 1D Gaussian
+    kernel = np.outer(gaussian_1D, gaussian_1D)             # 2D is outer product of 1D
+    kernel /= kernel.sum()                                  # Normalize to maintain overall brightness
+    print(f"Kernel shape [{kernel.shape}] and total weight [{kernel.sum()}].")
+    return kernel
+
+def get_half_kernel_size(kernel_size):
+    return (kernel_size - 1) // 2 if kernel_size % 2 == 1 else kernel_size // 2
 
 
 def num_params(module):
@@ -103,7 +118,7 @@ if __name__ == "__main__":
     # the tensor and/or np representation for use
 
     # Assignment: "load an image ... as a NumPy array in the usual height by width by channel layout, and
-    # convert it to a float 32 tensor in PyTorch's batch, channel, height, width layout."
+    # convert it to a float32 tensor in PyTorch's batch, channel, height, width layout."
     
     # Note: OpenCV would give BRG instead and would need the channel dimension reordered also
     img = np.array(Image.open(image_path))  # (H, W, C) uint8
@@ -123,8 +138,8 @@ if __name__ == "__main__":
     # Add a dimension of length 1 to represent the batch.
     tensor = t.unsqueeze(0) # (1, C, H, W) float32
     print(f"unsqueeze  shape [{tensor.shape}] and type [{tensor.dtype}].")
-    #make a copy of tensor to use later
-    tensor_copy = tensor.clone()
+    # make a copy of tensor to use later
+    clean_img_tensor = tensor.clone()
 
     # Problem 3
     problem = 3
@@ -255,18 +270,13 @@ if __name__ == "__main__":
     # Problem 8
     problem = 8
     print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
-    sigma = 1.0
-    kernel_size = 5
-    half = kernel_size // 2
-    kernel_axis = np.arange(-half, half + 1)                # [-2, -1, 0, 1, 2]
-    gaussian_1D = np.exp(-kernel_axis**2 / (2 * sigma**2))  # 1D Gaussian
-    kernel = np.outer(gaussian_1D, gaussian_1D)             # 2D is outer product of 1D
-    kernel /= kernel.sum()                                  # Normalize to maintain overall brightness
-    print(f"Kernel shape [{kernel.shape}] and total weight [{kernel.sum()}].")
 
+    kernel_sz = 19
+    half = get_half_kernel_size(kernel_sz)
+    kernel = gaussian_kernel(kernel_size=kernel_sz, sigma=1.0)
     conv = torch.nn.Conv2d(in_channels=3,
                            out_channels=3,
-                           kernel_size=kernel_size,
+                           kernel_size=kernel_sz,
                            padding=half,
                            padding_mode='reflect',
                            groups=3,
@@ -280,18 +290,18 @@ if __name__ == "__main__":
     with torch.no_grad():
         # Without copy_(), the weights would be random and we would be using an unitialized kernel.
         # With copy_(), we are explicitly setting the weights to our Gaussian kernel.
-        conv.weight.copy_(k.expand(3, 1, kernel_size, kernel_size))  # (out_channels, in_channels/groups, H, W), same kernel for each channel
+        conv.weight.copy_(k.expand(3, 1, kernel_sz, kernel_sz))  # (out_channels, in_channels/groups, H, W), same kernel for each channel
     conv.weight.requires_grad_(False)  # We don't want to learn the kernel, just use it as is
     print(f"Conv2d weight shape [{conv.weight.shape}] and requires_grad [{conv.weight.requires_grad}].")
 
     with torch.no_grad():
-        filtered_tensor = conv(tensor_copy)  # (1, C, H, W)
+        filtered_tensor = conv(clean_img_tensor)  # (1, C, H, W)
     print(f"Filtered tensor shape [{filtered_tensor.shape}].")
 
-    out_tensor = filtered_tensor.squeeze(0).permute(1, 2, 0).numpy()  # (1, C, H, W) -> (C, H, W) -> (H, W, C)
+    output_img_np = filtered_tensor.squeeze(0).permute(1, 2, 0).numpy()  # (1, C, H, W) -> (C, H, W) -> (H, W, C)
 
     fig, ax = plt.subplots()
-    ax.imshow(out_tensor)
+    ax.imshow(output_img_np)
     ax.set_title("PyTorch Filtered Image")
     if SHOW:
         plt.show()
@@ -316,7 +326,7 @@ if __name__ == "__main__":
     fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_scipy_gaussian_filtered_image.png")
     plt.close(fig)
 
-    max_diff = np.abs(out_tensor - out_scipy).max()
+    max_diff = np.abs(output_img_np - out_scipy).max()
     print(f"Max difference between PyTorch and Scipy filtered images: {max_diff:.12f}")
     print(f"float32 eps: {np.finfo(np.float32).eps:.6e}, float64 eps: {np.finfo(np.float64).eps:.6e}")
     '''
@@ -331,7 +341,7 @@ if __name__ == "__main__":
     problem = 9
     print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     # Double check by seperating border and interior regions
-    d = np.abs(out_tensor - out_scipy)
+    d = np.abs(output_img_np - out_scipy)
 
     interior = d[half:-half, half:-half, :]
     print(f"Interior max: [{interior.max():.12f}] or [{interior.max():.3e}]")
@@ -353,10 +363,9 @@ if __name__ == "__main__":
     problem = 10
     print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
 
-
     class SmallDenoiser(nn.Module):
         # Structured after Professor McNames' SmallDnCNN class in 11_deep_learning_on_ramp_a.ipynb, cell 12
-        def __init__(self, maps=16):
+        def __init__(self, in_ch=3, out_ch=3, maps=16):
             super().__init__()
             k = 3 # kernel size
             # Padding keeps the output the same size as the input.
@@ -377,13 +386,13 @@ if __name__ == "__main__":
             '''
             self.body = nn.Sequential(
                 # C_out(C_in * k^2 + 1) parameters per layer, where C_out = C_in = maps for the hidden layers, and C_out = 1 for the last layer
-                nn.Conv2d(1, maps, k, padding=pad),       # 16(1*9 + 1) = 160 parameters
+                nn.Conv2d(in_ch, maps, k, padding=pad),   # 16(3*9 + 1) = 448 parameters
                 nn.ReLU(),
                 nn.Conv2d(maps, maps, k, padding=pad),    # 16(16*9 + 1) = 2320 parameters
                 nn.ReLU(),
                 nn.Conv2d(maps, maps, k, padding=pad),    # 16(16*9 + 1) = 2320 parameters
                 nn.ReLU(),
-                nn.Conv2d(maps, 1, k, padding=pad)        # 1(16*9 + 1) = 145 parameters
+                nn.Conv2d(maps, out_ch, k, padding=pad)   # 3(16*9 + 1) = 435 parameters
                 # no ReLu after last layer; this allows for negative values in the output
             )
             print(f"Number of parameters in SmallDenoiser: {num_params(self)}")
@@ -426,13 +435,15 @@ if __name__ == "__main__":
             architecture of the neural network. When you call self.body(y), it passes the input y
             through all the layers defined in the nn.Sequential container, producing the output of
             the network.
+            Question: When is the forward called?  Where does it go in the sequence of things?
+
             '''
 
-    first_cnn_denoiser = SmallDenoiser()
+    first_cnn_denoiser = SmallDenoiser(in_ch=1, out_ch=1, maps=16)
     for i, layer in enumerate(first_cnn_denoiser.body):
         print(f"Layer {i}: {type(layer).__name__} has {num_params(layer)} parameters with shapes: {[tuple(p.shape) for p in layer.parameters()]}")
 
-    # Run receptive_Filed on my small denoiser to see how far this neural network can affect per pixel
+    # Run receptive_field on my small denoiser to see how far this neural network can affect per pixel
     hit, rows, cols = receptive_field(first_cnn_denoiser)
     print(f"Receptive field hit shape: {hit.shape}, rows: {rows}, cols: {cols}")
     plt.imshow(hit, cmap='gray')
@@ -441,3 +452,61 @@ if __name__ == "__main__":
         plt.show()
     plt.savefig(f"{OUTPUT_PATH}p{problem:02d}_receptive_field_hit_map.png")
     plt.close()
+
+
+    # Problem 11
+    problem = 11
+    print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+
+    # Using the clean image from earlier, add Gaussian noise.  Use sigma = 1.0.
+    # Crop to 256 x 256 so traing is fast on a CPU.  Use the center of the image for the crop.
+    r, c = 100, 100
+    clean_crop = clean_img_tensor[:, :, r:r+256, c:c+256]       # (1, 3, 256, 256)
+    print(f"Clean crop shape: {clean_crop.shape}")
+
+    # noisy_image = clean_image + noise
+    torch.manual_seed(0)  # for reproducibility
+    sigma = float(25 / 255) # about 10% of the DN range, scaled to [0,1]
+    noisy_tensor = clean_crop + torch.randn_like(clean_crop) * sigma
+
+    # Use the first_cnn_denoiser to predict the clean image given the noisy one.
+    denoiser = SmallDenoiser(in_ch=3, out_ch=3, maps=16)
+    if 0:
+        # Use the Adam optimizer for training the denoiser.
+        optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-3)
+    else:
+        # Use basic SGD
+        optimizer = torch.optim.SGD(denoiser.parameters(), lr=1e-3, momentum=0.9)
+
+    def mse_loss(predicted, target, use_PyTorch=False):
+        '''
+        Loss function based on Mean Squared Error.  Can be calculated manually or
+        using PyTorch's built-in function.  The use_PyTorch flag allows for switching between the two.
+
+        Returns a single number: the loss value.  The lower the loss, the better the model is performing.
+        '''
+        if not use_PyTorch:
+            return ((predicted - target) ** 2).mean()
+        else:
+            return torch.nn.functional.mse_loss(predicted, target)
+
+    # Train the denoiser
+    losses = []
+    for iteration in range(1000):
+        optimizer.zero_grad()
+        denoised = denoiser(noisy_tensor)
+        loss = mse_loss(denoised, clean_crop)
+        losses.append(loss.item())
+        loss.backward()
+        optimizer.step()
+
+    # Plot the loss.
+    fig, ax = plt. subplots()
+    ax.semilogy(losses)
+    ax.axhline(sigma**2, linestyle='--', color='orange', label=f"No Denoising ($\sigma^2$)")
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("MSE Loss")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_denoiser_training_loss.png")
+    plt.close(fig)
