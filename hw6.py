@@ -189,9 +189,12 @@ if __name__ == "__main__":
     hand_derived = 27*at**2 + 16*at + 4
     torch_gradient = x.grad.item()
 
-    print(f"f({at}) = {hand_derived} by hand.")
+    # Question: Why does the y.backward() operation had any effect on this x.grad?  How does it know to compute the gradient of y with respect to x?
+
+
+    print(f"f'({at}) = {hand_derived} by hand.")
     # print(f"The same function using backpropagation gave {y.item()}.")
-    print(f"f({at}) = {torch_gradient} by PyTorch gradient.")
+    print(f"f'({at}) = {torch_gradient} by PyTorch autograd.")
 
     diff = abs(torch_gradient - hand_derived)
     print(f"Difference: {diff}")
@@ -261,18 +264,21 @@ if __name__ == "__main__":
     ax.set_title(f"Final Loss vs Learning Rate")
     if SHOW:
         plt.show()
+    fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_final_loss_vs_learning_rate.png")
     plt.close(fig)
     '''
-    It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.
+    It broke around a learning rate of 0.008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.
     '''
-    print(f"It broke around a learning rate of 0.0008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.  The initial loss starts high, drops as the learning rate increases, and then climbs again as the learning rate gets too high.")
+    print(f"It broke around a learning rate of 0.008.  Up to that point, the estimated slope and intercept were getting more accurate, but then the loss curve went up exponentially and both the slope and the intercept went to NaN.  The initial loss starts high, drops as the learning rate increases, and then climbs again as the learning rate gets too high.")
 
 
     # Problem 8
     problem = 8
     print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Apply a Gaussian smoothing filter with hand-picked kernel weights using PyTorch and compare
+    # the result to SciPy's correlate function.  The two results should be nearly identical.
 
-    kernel_sz = 19
+    kernel_sz = 5
     half = get_half_kernel_size(kernel_sz)
     kernel = gaussian_kernel(kernel_size=kernel_sz, sigma=1.0)
     conv = torch.nn.Conv2d(in_channels=3,
@@ -284,9 +290,40 @@ if __name__ == "__main__":
                            bias=False)
 
     k = torch.tensor(kernel, dtype=torch.float32)
-    # Question: How do I know when something needs to be turned into a tensor?
-    # Answer: When you need to perform operations that are specific to PyTorch tensors, such as matrix multiplication, gradient computation, or using PyTorch's built-in functions.
-    # Question: I guess I'm not quite following how PyTorch organizes the problem space.
+    '''
+    Question: How do I know when something needs to be turned into a tensor?
+    GitHub Copilot Answer: When you need to perform operations that are specific to PyTorch tensors,
+    such as matrix multiplication, gradient computation, or using PyTorch's built-in functions.
+    Claude Answer: Anything PyTorch has to compute with, or compute gradients through, must be a
+    tensor.  NumPy is the hombase for loading, plotting and checking.  Convert to tensors or back
+    to NumPy arrays at the boundaries.
+        Three details that can cause a lot of errors:
+        1. Autograd only seens tensor operations.  A NumPy step in the middle is invisible to
+        autograd and the gradient chain breaks.  PyTorch refuses .numpy() on a tensor that
+        requires grad until you .detach() it.
+        2. NumPy defaults to float64 while PyTorch layers expect float32.  A mismatch gives a
+        "double vs float" error.
+        3. torch.from_numpy shares memory with the original NumPy array, but torch.tensor makes
+        a copy of the memory.
+
+    Question: I guess I'm not quite following how PyTorch organizes the problem space.
+    Claude Answer: Think of it as the following five pieces:
+    1. The tensor, or the data itself.  This was first introduced in problems 1 through 3.
+    2. The autograd or the built-in gradient/derivative calculations seen in problem 4.
+    3. The model, a function with learnable numbers written as forward.  In problem 5 this was
+        m*x + b, and in problem 10 this was the SmallDenoiser class.
+    4. The loss is the one number saying how wrong the output is.  This could be one of many
+        loss functions, but in problem 5 it was the mean squared error.
+    5. The optimizer is the rule that updates the weights from the gradients.  In problem 5
+    this was SGD, and in problem 10 it was Adam (or SGD).
+
+    In problem 8, Conv2d was a model with hand-chosen weights.  In problem 10, the same kind of
+    model was used, but the weights were found by the optimizer.  That is the jump from hand-built
+    kernels to trained ones as in 11_deep_learning_on_ramp_a.ipynb.  nn.Module mostly handles
+    bookkeeping: it holds the layers and exposes .parameters(), which si exactly what you hand
+    the optimizer.
+    GitHub: The optimizer is the bridge between the model and the loss, and it is what makes the model learn.
+    '''
 
     with torch.no_grad():
         # Without copy_(), the weights would be random and we would be using an unitialized kernel.
@@ -306,7 +343,6 @@ if __name__ == "__main__":
     ax.set_title("PyTorch Filtered Image")
     if SHOW:
         plt.show()
-    # print problem with a leading zero if less than 10, and no decimal places
     fig.savefig(f"{OUTPUT_PATH}p{problem:02d}_guassian_filtered_image.png")
     plt.close(fig)
 
@@ -328,7 +364,7 @@ if __name__ == "__main__":
     plt.close(fig)
 
     max_diff = np.abs(output_img_np - out_scipy).max()
-    print(f"Max difference between PyTorch and Scipy filtered images: {max_diff:.12f}")
+    print(f"Max difference between PyTorch and Scipy filtered images: {max_diff:.6e}")
     print(f"float32 eps: {np.finfo(np.float32).eps:.6e}, float64 eps: {np.finfo(np.float64).eps:.6e}")
     '''
     Rule of thumb:
@@ -357,7 +393,7 @@ if __name__ == "__main__":
     If the border max is much larger than the interior max, then there is likely a bug in how the borders are handled.
     If both are large (say > 1e-2), then there is likely a bug in the weights or scaling of the kernel.
     '''
-    print(f"There was no disagreement between the PyTorch and SciPy approaches beyond the float32 rounding.  The max difference of {max_diff:.1e} (about {np.finfo(np.float32).eps:.1e} eps) is accumulated rounding error from float32 arithmetic compared to float64 arithmetic.  The interior max is {interior.max():.1e} and the border max is {border.max():.1e}, so there is no disagreement in the border handling either.")
+    print(f"There was no disagreement between the PyTorch and SciPy approaches beyond the float32 rounding.  The max difference of {max_diff:.1e} is accumulated rounding error from float32 arithmetic compared to float64 arithmetic.  The interior max is {interior.max():.1e} and the border max is {border.max():.1e}, so there is no disagreement in the border handling either.")
 
 
     # Problem 10
@@ -374,19 +410,79 @@ if __name__ == "__main__":
             # to avoid introducing new values.
             pad = (k-1) // 2
             '''
-            In this CNN, the first convolution turns a gray map into 16 feature maps, then the
-            middle layers combine those 16 feature maps into 16 new feature maps, and the last
-            layer collapses them back into one map (or three for color) so that the output is
-            the same size as the input.  The output is the noise, so it can be subtracted
-            from the input to get the denoised image.
-            Question: Why is the output noise and not something else?
-            Question: Why would collapsing down to three maps give color instead of something else?
-            Generally, why does this math and ML give us the results we are hoping for instead of
-            something that might mean something to the computer but not to humans?  Why does this work?
+            In this CNN, the first convolution turns an image with C_in maps into 16 feature maps,
+            then the middle layers combine those 16 feature maps into 16 new feature maps, and the
+            last layer collapses them back into one map (or three for color) so that the output is
+            the same size as the input.  The output is the noise, so it can be subtracted from the
+            input to get the denoised image.
 
+            Question: Why is the output noise and not something else?
+            Claude Answer: Your forward returns y - self.body(y), and the loss compares that result
+            to the clean image, x.  Since the noise is n = y - x and y = x + n, the loss is:
+                    (y - body(y)) - x = -(body(y) - n)
+            So minimizing the loss forces body(y) towards n.  Nothin in the convolution layers knows
+            what noise is.  The structure of forward plus the loss makes the layers predict it.  The
+            alternative is `return self.body(y)`, where the network has to rebuild the entire image,
+            includeing a perfect passthrough of everything that isn't noise.  The residual approach is
+            called residual learning and the DnCNN paper (Zhang, Zuo, Chen, Meng and Zhang, IEEE Trans.
+            Image Processing 26(7), 2017, arXiv:1608.03981, See: https://arxiv.org/pdf/1608.03981) had
+            the network otuput the residual noise and subtract it from the noisy input, instead of
+            estimating the clean image directly.  McNames's `SmallDnCC` follows that design, as
+            does the "x_hat = y - n_hat" line in Demo B.
+              A practical benefit is that a freshly initialized network has small weights, so
+            `body(y)` is small and the output starts close to the input.  The loss then begins
+            near sigma^2, which is the dashed "no denoising" line.  Training only has to carve
+            away from there.  It also explains the earlier SGD run where the PSNR hardly improved,
+            with the weights barely trained, the output stayed close to the noisy input.
+
+            Question: Why would collapsing down to three maps give color instead of something else?
+            Claude Answer: Collapsing down to three maps does not give color, by itself.  The
+            meaning comes from the tensor layout and the loss.  Output channel 0 is compared with
+            the clean image's channel 0, which is red only because Problem 2 `permute()` put red
+            first.  The network never sees the word "red".  If you permuted the channels of the
+            noisy and clean images the same way, it would learn exactly the same thing.  The 16
+            hidden maps are colors either.  They're learned features.
+              Two related points:
+              1. This is why the 1-channel last layer was such a quiet bug.  One output map can't
+            make per-channle corrections.
+              2. The first layer's filters now span all three input channels, unlike Problem 8's
+              `groups=3`.  That helps because noise is independent per channel, while edges are
+            correlated across channels, so the network can use the other channels to decide what
+            the noise is in one channel.
+
+            Question: Generally, why does this math and ML give us the results we are hoping for
+            instead of something that might mean something to the computer but not to humans?
+            Why does this work?
+            Claude Answer: The network optimizes only the loss.  Everything human-meaningful comes
+            from the data and the loss we chose, namely pairs of (noisy, clean) images and a loss
+            that rewards matching the clean image.  There are three reasons this is learnable and
+            works:
+              1. Noise differs statistically from the image content.  It's assumed to be independent
+            from pixel to pixel and has zero mean, while real images are spatially correlated.
+            Problem 8's Gaussian blur exploits the same fact, and the network learns many content-
+            adaptive filters: smooth in flat regions, careful near edges.
+              2. Convolution builds in useful assumptions.  The same small filters apply everywhere
+            (locality and weight sharing), which suits the spatially correlated content in image
+            statistics.
+              3. MSE training aims at the best average guess.  Minimizing MSE over many examples
+            pushes the network toward the average clean pixel given the noisy neighborhood.  With
+            a 9x9 receptive field from Problem 10, that neighborhood is all the context it gets.
+              It can also go wrong in the ways that you're worried about, and your own work already
+            shows some:
+              1. Optimizer and settings matter.  Your SGD run didn't learn, which was why it hardly
+            improved the PSNR.
+              2. One image invites memoriztion.  Notebook B trains on fresh noise very step and
+            validates on held-out photos for this reason (the overfitting paragraph after the
+            training cell).  Your PSNR is a training PSNR.
+              3. MSE and PSNR aren't perception.  MSE-optimal output tends to be smoother than
+            people prefer.  That's why Project 2's dependencies include torchmetrics for SSIM
+            and LPIPS.
+              4. It fails on noise it never saw.  Demo B's final section shows the network loosing
+            to the noisy input at sigma = 5 / 255, a noise level it never saw in training.
             '''
             self.body = nn.Sequential(
-                # C_out(C_in * k^2 + 1) parameters per layer, where C_out = C_in = maps for the hidden layers, and C_out = 1 for the last layer
+                # C_out(C_in * k^2 + 1) parameters per layer, where C_out = C_in = maps for the hidden
+                # layers, and C_out = 1 for gray-scale or 3 for RGB color for the last layer
                 nn.Conv2d(in_ch, maps, k, padding=pad),   # 16(3*9 + 1) = 448 parameters
                 nn.ReLU(),
                 nn.Conv2d(maps, maps, k, padding=pad),    # 16(16*9 + 1) = 2320 parameters
@@ -402,42 +498,61 @@ if __name__ == "__main__":
             return y - self.body(y)  # residual learning: output is the noise, so subtract it from the input to get the denoised image
             '''
             Question: So forward is the goal, the function to optimize over?
-            Answer: Yes, the forward method defines how the input data flows through the network
+            GitHub Copilot Answer: Yes, the forward method defines how the input data flows through the network
             layers to produce the output. During training, PyTorch uses this method to compute the
             output and then calculates the loss based on the difference between the predicted
             output and the actual target. The optimizer then updates the model's parameters based
             on this loss.
+            Claude Answer: forward computes the output from the input and the currentweights.
+            What gets minimized is the loss, as a function of the weights.  In problem 5, m*x+b was
+            the forward computation and the MSE over m and b was what got minimized.  In problem 10,
+            the forward computation is y - self.body(y) and the MSE over the weights of the
+            convolutional layers is what gets minimized.
             Question: Which parameters?  Just the elements of the kernels since C_out and C_in are
             calculated?
-            Answer: Yes, the parameters are the weights and biases of the convolutional layers,
+            GitHub Copilot Answer: Yes, the parameters are the weights and biases of the convolutional layers,
             which are the elements of the kernels.
+            Claude Answer: The learned parameters are the kernel weights and the biases.  C_in and
+            C_out, the kernel size, the depth and the padding are the hyperparameters that *you*
+            choose, and they stay fixed during training.  The parameter count is calculated from
+            them, but they aren't calculated themselves.
             Question: Where are the biases represented in the code above?
-            Answer: The biases are part of the convolutional layers in PyTorch. By default,
+            GitHub Copilot Answer: The biases are part of the convolutional layers in PyTorch. By default,
             nn.Conv2d includes a bias term for each output channel. In the code above, the biases
             are automatically included in each Conv2d layer unless you explicitly set bias=False
             when defining the layer.
             Question: So the kernel weights are analagus to the slope from a least squares fit and the
             bias is analagus to the intercept?
-            Answer: Yes, in a way. The kernel weights in a convolutional layer determine how the input
+            GitHub Copilot Answer: Yes, in a way. The kernel weights in a convolutional layer determine how the input
             is transformed to produce the output, similar to how the slope in a linear equation determines
             the rate of change. The bias term allows for an additional degree of freedom, similar to the
             intercept in a linear equation, allowing the model to shift the output up or down. However,
             convolutional layers are more complex than simple linear equations, as they involve multiple
             weights and biases that interact with the input data in a spatial manner.
             Question: Why is it called "forward"?  What is the context there?
-            Answer: The term "forward" refers to the forward pass of the neural network, where the
+            GitHub Copilot Answer: The term "forward" refers to the forward pass of the neural network, where the
             input data is passed through the network layers to produce an output. This is in
             contrast to the "backward" pass, where gradients are computed and parameters are updated
             based on the loss. The forward method is a standard convention in PyTorch for defining
             how data flows through the model.
             Question: What is self.body()?  What value(s) does it hold and what do they represent?
-            Answer: self.body is an instance of nn.Sequential, which is a container that holds a
+            GitHub Copilot Answer: self.body is an instance of nn.Sequential, which is a container that holds a
             sequence of layers (in this case, convolutional and ReLU layers). It represents the
             architecture of the neural network. When you call self.body(y), it passes the input y
             through all the layers defined in the nn.Sequential container, producing the output of
             the network.
             Question: When is the forward called?  Where does it go in the sequence of things?
-
+            Claude Answer: The forward is never called directly.  denoiser(noisy_tensor) triggers
+            nn.Module's machinery, which runs forward.  It runs once per iteration, at the second
+            step of the training loop, after optimizer.zero_grad().  It also runs in Problem 12
+            under torch.no_grad(), and in receptive_field, which calls model.eval()(u).  Creating
+            SmallDenoiser(...) runs __init__, which builds the layers, and no data flows through at
+            that point.
+              The name comes from the direction of forward travel.  Forward carries the data from
+            input to output while PyTorch records each operation.  loss.backward() then walks that
+            record in reverse to get a gradient for every weight.  receptive_field uses this: it
+            asks for the gradient of one output pixel and sees which input pixels have a nonzero
+            gradient.
             '''
 
     first_cnn_denoiser = SmallDenoiser(in_ch=1, out_ch=1, maps=16)
@@ -459,7 +574,7 @@ if __name__ == "__main__":
     problem = 11
     print(f"\n\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
 
-    # Using the clean image from earlier, add Gaussian noise.  Use sigma = 1.0.
+    # Using the clean image from earlier, add Gaussian noise.
     # Crop to 256 x 256 so traing is fast on a CPU.  Use the center of the image for the crop.
     r, c = 100, 100
     clean_crop = clean_img_tensor[:, :, r:r+256, c:c+256]       # (1, 3, 256, 256)
@@ -495,7 +610,7 @@ if __name__ == "__main__":
     losses = []
     for iteration in range(1000):
         optimizer.zero_grad()
-        training_output = denoiser(noisy_tensor)
+        training_output = denoiser(noisy_tensor) # forward() gets called here
         loss = mse_loss(training_output, clean_crop)
         losses.append(loss.item())
         loss.backward()
@@ -504,7 +619,7 @@ if __name__ == "__main__":
     # Plot the loss.
     fig, ax = plt. subplots()
     ax.semilogy(losses)
-    ax.axhline(sigma**2, linestyle='--', color='orange', label=f"No Denoising ($\sigma^2$)")
+    ax.axhline(sigma**2, linestyle='--', color='orange', label=r"No Denoising ($\sigma^2$)")
     ax.set_xlabel("Iteration")
     ax.set_ylabel("MSE Loss")
     ax.legend()
