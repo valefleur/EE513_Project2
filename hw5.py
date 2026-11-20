@@ -1,0 +1,123 @@
+# hw5.py -- Demosaicing: bilinear vs Malvar-He-Cutler
+import os
+import numpy as np
+import rawpy
+import matplotlib.pyplot as plt
+
+import psu_imaging as psu
+import my_library.demosaic as dm
+from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
+
+SHOW = True
+
+# A raw file with fine, high-contrast detail (checkerboard from HW2,
+# slanted edge, brick, text, foliage). The same file is used for every item.
+image_path = 'images/iPhone16/Lightroom/'
+output_path = 'output/hw5_demosaic/'
+
+raw_file = f'{image_path}hw2_slanted/Nov_08/set3/center_501mm/APC_0658.dng'
+
+'''
+def part1(raw_file=RAW_FILE, SHOW=False):
+    """Items 1-3. Returns (reference, mosaic) for the rest of the assignment."""
+    os.makedirs(output_path, exist_ok=True)
+    name = os.path.basename(raw_file)
+
+    # ---- Item 1: CFA pattern and offset ----
+    with rawpy.imread(str(raw_file)) as raw:
+        pattern = dm.cfa_pattern(raw)
+        blacks = set(raw.black_level_per_channel)
+        assert len(blacks) == 1, f"per-channel black levels differ: {blacks}"
+        black = blacks.pop()
+        raw_dn = raw.raw_image_visible.copy()      # copy: the buffer dies when the file closes
+    offset = dm.rggb_offset(pattern)
+    rggb = dm.align_to_rggb(raw_dn, offset)
+    print(f"DELIVERABLE 01: {name}: CFA pattern {pattern}; offset {offset[0]} row, "
+          f"{offset[1]} column to put red at the top left. "
+          f"Mosaic {raw_dn.shape} -> {rggb.shape}.")
+
+    # ---- Item 2: ground truth ----
+    saturation = cam_spec.saturation_dn
+    reference = dm.reference_from_mosaic(rggb, black, saturation)
+    print(f"\tblack {black} DN, saturation {saturation} DN, reference {reference.shape}, "
+          f"range {reference.min():.4f} to {reference.max():.4f}")
+
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5.5))
+    ax[0].imshow(dm.display_rgb(reference))
+    ax[0].set_title("Reference (linear, sRGB-encoded for display)")
+    ax[1].imshow(dm.display_rgb(reference, balance=True))
+    ax[1].set_title("Same, gray-world balanced for viewing only")
+    for a in ax: a.axis("off")
+    fig.suptitle(f"Quarter-resolution ground truth from {name}: "
+                 f"{reference.shape[1]} x {reference.shape[0]}, no interpolation")
+    fig.tight_layout()
+    fig.savefig(f"{output_path}02_reference.png", dpi=150)
+    print(f"DELIVERABLE 02: {output_path}02_reference.png")
+    if SHOW: plt.show()
+    plt.close(fig)
+
+    # ---- Item 3: mosaic it back down, confirm the round trip ----
+    mosaic = dm.mosaic_reference(reference)
+    n = dm.assert_round_trip(reference, mosaic)
+    print(f"DELIVERABLE 03: round trip PASSED, {n:,} of {n:,} sampled sites equal the "
+          f"reference exactly (mosaic {mosaic.shape}, RGGB).")
+    return reference, mosaic
+'''
+
+if __name__ == "__main__":
+    # reference, mosaic = part1()
+
+    os.makedirs(output_path, exist_ok=True)
+    name = os.path.basename(raw_file)
+
+    # Problem 1
+    problem = 1
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # CFA pattern and offset
+    with rawpy.imread(str(raw_file)) as raw:
+        pattern = dm.cfa_pattern(raw)
+        blacks = set(raw.black_level_per_channel)
+        assert len(blacks) == 1, f"per-channel black levels differ: {blacks}"
+        black = blacks.pop()
+        raw_dn = raw.raw_image_visible.copy()      # copy: the buffer dies when the file closes
+    offset = dm.rggb_offset(pattern)
+    rggb = dm.align_to_rggb(raw_dn, offset)
+    print(f"DELIVERABLE 01: {name}: CFA pattern {pattern}; offset {offset[0]} row, "
+          f"{offset[1]} column to put red at the top left. "
+          f"Mosaic {raw_dn.shape} -> {rggb.shape}.")
+
+    # Problem 2
+    problem = 2
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Generate a ground truth
+    saturation = cam_spec.saturation_dn
+    reference = dm.reference_from_mosaic(rggb, black, saturation)
+    print(f"\tblack {black} DN, saturation {saturation} DN, reference {reference.shape}, "
+          f"range {reference.min():.4f} to {reference.max():.4f}")
+
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5.5))
+    ax[0].imshow(dm.display_rgb(reference))
+    ax[0].set_title("Reference (linear, sRGB-encoded for display)")
+    ax[1].imshow(dm.display_rgb(reference, balance=True))
+    ax[1].set_title("Same, gray-world balanced for viewing only")
+    for a in ax:
+        a.axis("off")
+    fig.suptitle(f"Quarter-resolution ground truth from {name}: "
+                 f"{reference.shape[1]} x {reference.shape[0]}, no interpolation")
+    fig.tight_layout()
+    fig.savefig(f"{output_path}02_reference.png", dpi=150)
+    print(f"DELIVERABLE 02: {output_path}02_reference.png")
+    if SHOW:
+        plt.show()
+    plt.close(fig)
+
+
+    # Problem 3
+    problem = 3
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    # Mosaic it back down, confirm the round trip
+    mosaic = dm.mosaic_reference(reference)
+    n = dm.assert_round_trip(reference, mosaic)
+    print(f"DELIVERABLE 03: round trip PASSED, {n:,} of {n:,} sampled sites equal the "
+          f"reference exactly (mosaic {mosaic.shape}, RGGB).")
+
