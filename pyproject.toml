@@ -56,3 +56,9 @@ learning = [
 package = false
 # Without this, uv installs every group by default and the split does nothing.
 default-groups = []
+
+[tool.pytest.ini_options]
+# The repo root holds my_library/ and psu_imaging.py but is not an installed
+# package (package = false above), so put it on sys.path for the tests.
+pythonpath = ["."]
+testpaths = ["tests"]

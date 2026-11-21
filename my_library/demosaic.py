@@ -183,3 +183,110 @@ def display_rgb(linear_rgb, balance=False):
         means = x.reshape(-1, 3).mean(axis=0)
         x = x * (means[1] / means)
     return psu.linear_to_srgb(np.clip(x, 0, 1))
+
+
+from scipy.ndimage import correlate
+
+# Red and blue live on a square lattice (every other row AND column): the 2-D
+# triangle (tent) filter, the outer product of the 1-D linear interpolator [1, 2, 1]/2.
+K_RB = np.array([[1, 2, 1],
+                 [2, 4, 2],
+                 [1, 2, 1]], dtype=float) / 4.0
+# Green lives on a checkerboard (quincunx) lattice: its nearest neighbors are the
+# four up/down/left/right sites, so the tent becomes a diamond.
+K_G = np.array([[0, 1, 0],
+                [1, 4, 1],
+                [0, 1, 0]], dtype=float) / 4.0
+
+
+def rggb_masks(shape):
+    """Boolean masks of where each color was MEASURED in an RGGB mosaic.
+
+    Parameters
+    ----------
+    shape : (int, int)
+        Mosaic height and width.
+
+    Returns
+    -------
+    bool array (H, W, 3): [..., 0] True at R sites (even, even),
+    [..., 1] at both G sites, [..., 2] at B sites (odd, odd).
+    """
+    m = np.zeros((*shape, 3), dtype=bool)
+    m[0::2, 0::2, 0] = True # Red
+    m[0::2, 1::2, 1] = True # Green (on red rows)
+    m[1::2, 0::2, 1] = True # Green (on blue rows)
+    m[1::2, 1::2, 2] = True # Blue
+    return m
+
+
+def normalized_interpolate(values, mask, kernel):
+    """Weighted average of only the MEASURED neighbors (normalized convolution).
+
+        est(x) = sum_k K(k) * M(x+k) * V(x+k)  /  sum_k K(k) * M(x+k)
+
+    V holds the samples, M is 1 where a sample was measured and 0 elsewhere.
+    Outside the frame both are zero-padded, so a border pixel divides by the
+    weight of the neighbors that really exist rather than inventing any: no
+    black border, no wrap, no reflection. In the interior of a Bayer mosaic
+    the denominator is always 4, so this is exactly ordinary bilinear.
+
+    Parameters
+    ----------
+    values : float array (H, W)   mosaic (only the masked sites are read)
+    mask   : bool array (H, W)    True where this color was measured
+    kernel : float array (3, 3)   K_RB or K_G
+
+    Returns
+    -------
+    float array (H, W): measured values kept exactly, gaps filled.
+    """
+    m = mask.astype(float)
+    num = correlate(values * m, kernel, mode="constant", cval=0.0)
+    den = correlate(m, kernel, mode="constant", cval=0.0)
+    est = num / den                       # den >= 1 everywhere for a 2x2-tiled mosaic
+    return np.where(mask, values, est)    # measured sites returned bit for bit; others estimated
+
+
+def bilinear_demosaic(mosaic):
+    """Bilinear demosaic of an RGGB mosaic; each channel from its own neighbors only.
+
+    Missing value at a site, by where you stand:
+        R site : G = mean of 4 cross neighbors,  B = mean of 4 diagonals
+        G1 site (red row) : R = mean(left, right),  B = mean(up, down)
+        G2 site (blue row): R = mean(up, down),     B = mean(left, right)
+        B site : G = mean of 4 cross neighbors,  R = mean of 4 diagonals
+    At the frame border, the mean is over whichever of those neighbors exist.
+
+    Frequency view: each color plane is a zero-stuffed (decimated) signal, and
+    bilinear is a fixed low-pass (tent) filter on it. It blurs fine detail and
+    smooths noise; it never looks at the other channels.
+
+    Parameters
+    ----------
+    mosaic : float array (H, W), RGGB, linear light. Odd H or W is fine
+        (the quarter-res reference from a 3022 x 4030 mosaic is 1511 x 2015).
+
+    Returns
+    -------
+    float array (H, W, 3), channel order R, G, B.
+    """
+    mosaic = np.asarray(mosaic, dtype=float)
+    masks = rggb_masks(mosaic.shape)
+    kernels = (K_RB, K_G, K_RB)
+    return np.stack([normalized_interpolate(mosaic, masks[..., c], kernels[c])
+                     for c in range(3)], axis=-1)
+
+
+def busiest_crop(rgb, size=96):
+    """(row, col) of the size x size window with the most green-channel detail.
+
+    Uses the standard deviation of tile means of the gradient magnitude, a cheap
+    "where are the edges" finder, so figures show a region where demosaicing matters.
+    """
+    g = rgb[..., 1]
+    grad = np.hypot(*np.gradient(g))
+    h, w = (g.shape[0] // size) * size, (g.shape[1] // size) * size
+    tiles = grad[:h, :w].reshape(h // size, size, w // size, size).mean(axis=(1, 3))
+    i, j = np.unravel_index(np.argmax(tiles), tiles.shape)
+    return i * size, j * size

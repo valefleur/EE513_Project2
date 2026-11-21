@@ -121,3 +121,43 @@ if __name__ == "__main__":
     print(f"DELIVERABLE 03: round trip PASSED, {n:,} of {n:,} sampled sites equal the "
           f"reference exactly (mosaic {mosaic.shape}, RGGB).")
 
+
+    # Problem 4
+    problem = 4
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    4. Implement bilinear demosaicing yourself. Interpolate each channel from its own measured
+    neighbors, and take care at the frame border, where a pixel has fewer neighbors than it does
+    in the middle.
+    '''
+
+    # Bilinear demosaic of the re-mosaicked reference.
+    crop_size = 96
+    bilinear = dm.bilinear_demosaic(mosaic)
+    dm.assert_round_trip(bilinear, mosaic)       # measured sites must survive untouched
+    r, c = dm.busiest_crop(reference, crop_size)
+    sl = (slice(r, r + crop_size), slice(c, c + crop_size))
+
+    # Colorbar gets its own narrow column so all three image panels are the same size.
+    fig = plt.figure(figsize=(13.5, 4.6))
+    gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 0.05], wspace=0.08)
+    ax = [fig.add_subplot(gs[0, i]) for i in range(3)]
+    cax = fig.add_subplot(gs[0, 3])
+    panels = [("Reference (truth)", reference),
+              ("Bilinear", bilinear),
+              ("|error|, mean over R,G,B", None)]
+    for a, (title, img) in zip(ax, panels):
+        if img is None:
+            im = a.imshow(np.abs(bilinear - reference)[sl].mean(axis=2), cmap="magma")
+            fig.colorbar(im, cax=cax, label="|error|, linear light")
+        else:
+            a.imshow(dm.display_rgb(img, balance=True)[sl], interpolation="nearest")
+        a.set_title(title); a.axis("off")
+    fig.suptitle(f"Item 4: bilinear demosaic, {crop_size}x{crop_size} crop at row {r}, col {c} "
+                 f"(display balanced, numbers are not)")
+    fig.savefig(f"{output_path}04_bilinear.png", bbox_inches="tight", dpi=150)
+    print(f"DELIVERABLE 04: bilinear demosaic {bilinear.shape}; measured sites preserved; "
+          f"figure {output_path}04_bilinear.png")
+    if SHOW:
+        plt.show()
+    plt.close(fig)
