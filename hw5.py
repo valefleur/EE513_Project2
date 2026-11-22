@@ -419,3 +419,57 @@ if __name__ == "__main__":
                               f"is not clipped.",
                       output_path=latex_file, VERBOSE=False, align="lrr")
     print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 15
+    problem = 15
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    15. Your reference came out of a single raw frame, so it carries the sensor's noise in every
+    pixel, and the two algorithms don't treat noise the same way. Box-average your reference down
+    by another factor of two, which halves the noise standard deviation, mosaic that down, and run
+    both methods again.
+    '''
+    # Averaging 4 pixels with independent noise divides the noise std by sqrt(4) = 2.
+    quiet_reference = dm.box_downsample(reference, 2)
+    quiet_mosaic = dm.mosaic_reference(quiet_reference)
+    dm.assert_round_trip(quiet_reference, quiet_mosaic)
+    quiet = {"Bilinear": dm.bilinear_demosaic(quiet_mosaic),
+             "Malvar-He-Cutler": dm.mhc_demosaic(quiet_mosaic)}
+    quiet_psnr = {n: (dm.psnr(img, quiet_reference, PEAK),
+                      dm.psnr(img, quiet_reference, PEAK, MARGIN)) for n, img in quiet.items()}
+
+    print(f"DELIVERABLE {problem:02d}: PSNR vs the quieter reference (dB), peak {PEAK}, "
+          f"{quiet_reference.shape[1]}x{quiet_reference.shape[0]}")
+    print(f"\t{'method':20s} {'P13 whole':>10s} {'P13 middle':>11s} "
+          f"{'P15 whole':>10s} {'P15 middle':>11s}")
+    for n in quiet_psnr:
+        print(f"\t{n:20s} {psnr_table[n][0]:10.2f} {psnr_table[n][1]:11.2f} "
+              f"{quiet_psnr[n][0]:10.2f} {quiet_psnr[n][1]:11.2f}")
+    for label, table in [("P13 (single frame)", psnr_table), ("P15 (quieter)", quiet_psnr)]:
+        print(f"\tMHC - bilinear, {label:18s}: "
+              f"{table['Malvar-He-Cutler'][0] - table['Bilinear'][0]:+.2f} dB whole, "
+              f"{table['Malvar-He-Cutler'][1] - table['Bilinear'][1]:+.2f} dB middle")
+    print("\tCaution: averaging also halves the resolution, so scene detail is finer relative\n"
+          "\tto the pixel grid. Both the noise and the difficulty changed; the MHC - bilinear\n"
+          "\tgap, not either absolute PSNR, is the number to interpret.")
+
+    latex_file = f"{output_path}{problem:02d}_psnr_quieter.txt"
+    names = list(quiet_psnr)
+    lf.generate_table([names,
+                       [f"{psnr_table[n][0]:.2f}" for n in names],
+                       [f"{psnr_table[n][1]:.2f}" for n in names],
+                       [f"{quiet_psnr[n][0]:.2f}" for n in names],
+                       [f"{quiet_psnr[n][1]:.2f}" for n in names]],
+                      ["Method", "Single, whole", "Single, middle",
+                       "Quieter, whole", "Quieter, middle"],
+                      caption=f"PSNR (dB) of each demosaicer against its own reference, peak "
+                              f"value {PEAK:g}, linear light, all three channels. Single: the "
+                              f"single-frame reference of Problem 13 ({reference.shape[1]} "
+                              f"$\\times$ {reference.shape[0]}). Quieter: that reference "
+                              f"box-averaged by 2 ({quiet_reference.shape[1]} $\\times$ "
+                              f"{quiet_reference.shape[0]}), halving the noise standard "
+                              f"deviation, then re-mosaicked and demosaiced again. Middle: "
+                              f"{MARGIN} pixels excluded on every side.",
+                      output_path=latex_file, VERBOSE=False, align="lrrrr")
+    print(f"\tLaTeX for the report: {latex_file}")

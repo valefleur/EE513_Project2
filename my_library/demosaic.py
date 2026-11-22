@@ -572,3 +572,30 @@ def psnr(estimate, reference, peak=1.0, margin=0):
         r = r[margin:-margin, margin:-margin]
     mse = np.mean((e - r) ** 2)
     return float("inf") if mse == 0 else float(10 * np.log10(peak ** 2 / mse))
+
+
+def box_downsample(image, factor=2):
+    """Average non-overlapping ``factor`` x ``factor`` blocks into one pixel each.
+
+        out[i, j] = mean of image[f*i : f*i + f, f*j : f*j + f]   (per channel)
+
+    If the noise in each pixel is independent with standard deviation sigma,
+    the mean of n = factor^2 pixels has standard deviation sigma / sqrt(n):
+    factor 2 averages 4 pixels and halves the noise. The cost is resolution:
+    the output is 1/factor the size in each direction, so scene detail becomes
+    finer relative to the pixel grid. Rows/columns that do not fill a whole
+    block are dropped.
+
+    Parameters
+    ----------
+    image : float array (H, W) or (H, W, C).
+    factor : int, block size.
+
+    Returns
+    -------
+    float array (H // factor, W // factor[, C]).
+    """
+    x = np.asarray(image, float)
+    h, w = (x.shape[0] // factor) * factor, (x.shape[1] // factor) * factor
+    x = x[:h, :w]
+    return x.reshape(h // factor, factor, w // factor, factor, *x.shape[2:]).mean(axis=(1, 3))

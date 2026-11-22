@@ -252,3 +252,13 @@ def test_psnr_matches_lecture_helper_on_in_range_data():
     rng = np.random.default_rng(14)
     a, b = rng.random((20, 20, 3)), rng.random((20, 20, 3))
     assert np.isclose(dm.psnr(a, b), psu.psnr(a, b))
+
+
+def test_box_downsample_shape_values_and_noise():
+    img = np.arange(5 * 7 * 3, dtype=float).reshape(5, 7, 3)
+    out = dm.box_downsample(img)
+    assert out.shape == (2, 3, 3)                         # odd row/col dropped
+    np.testing.assert_allclose(out[0, 0], img[:2, :2].mean(axis=(0, 1)))
+    # Independent noise: std halves (4 samples averaged), within sampling error.
+    noise = np.random.default_rng(15).normal(0, 1.0, (800, 800))
+    assert abs(dm.box_downsample(noise).std() - 0.5) < 0.01
