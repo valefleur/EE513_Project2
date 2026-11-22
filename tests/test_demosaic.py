@@ -234,3 +234,21 @@ def test_latex_sci_and_table_alignment():
     # default unchanged
     assert lf.generate_table([["a"], ["1"]], ["x", "y"], VERBOSE=False).startswith(
         r"\begin{tabular}{l | l}")
+
+
+def test_psnr_known_values_and_margin():
+    ref = np.zeros((10, 10))
+    est = np.full((10, 10), 0.1)                     # MSE 0.01 -> 20 dB at peak 1
+    assert np.isclose(dm.psnr(est, ref), 20.0)
+    assert np.isclose(dm.psnr(est * 0.5, ref), 20.0 + 20 * np.log10(2))   # +6.02 dB
+    est2 = est.copy(); est2[0, :] = 1.0              # damage only the top row
+    assert np.isclose(dm.psnr(est2, ref, margin=1), 20.0)
+    assert dm.psnr(ref, ref) == float("inf")
+
+
+def test_psnr_matches_lecture_helper_on_in_range_data():
+    """Agrees with psu.psnr (Prof. McNames) when nothing needs clipping."""
+    import psu_imaging as psu
+    rng = np.random.default_rng(14)
+    a, b = rng.random((20, 20, 3)), rng.random((20, 20, 3))
+    assert np.isclose(dm.psnr(a, b), psu.psnr(a, b))

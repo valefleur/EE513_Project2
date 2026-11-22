@@ -541,3 +541,34 @@ def measured_site_check(rgb, mosaic, edge=1):
             "on_edge": int((changed & ring).sum()),
             "max_abs": float(np.abs(measured - mosaic).max()),
             "exact": not changed.any()}
+
+
+def psnr(estimate, reference, peak=1.0, margin=0):
+    """Peak signal-to-noise ratio of ``estimate`` against ``reference``, in dB.
+
+        MSE  = mean over pixels and channels of (estimate - reference)^2
+        PSNR = 10 log10( peak^2 / MSE )
+
+    ``peak`` is the largest value the signal can take, here 1.0 because the
+    reference is linear light normalized so that saturation = 1. Every 6.02 dB
+    is a halving of the RMS error. Unlike psu.psnr (Prof. McNames), nothing is
+    clipped here: MHC overshoot outside [0, 1] counts as error, as it should
+    for a stage whose output feeds later linear processing.
+
+    Parameters
+    ----------
+    estimate, reference : float arrays, same shape (H, W) or (H, W, 3).
+    peak : float, the signal's maximum possible value.
+    margin : int, pixels excluded on every side before averaging (0 = whole frame).
+
+    Returns
+    -------
+    float, dB (inf if the images are identical over the region).
+    """
+    e = np.asarray(estimate, float)
+    r = np.asarray(reference, float)
+    if margin:
+        e = e[margin:-margin, margin:-margin]
+        r = r[margin:-margin, margin:-margin]
+    mse = np.mean((e - r) ** 2)
+    return float("inf") if mse == 0 else float(10 * np.log10(peak ** 2 / mse))

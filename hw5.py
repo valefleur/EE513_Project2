@@ -379,3 +379,43 @@ if __name__ == "__main__":
                               r"$10^{-12}$ (one unit in the last place).",
                       output_path=latex_file, VERBOSE=False, align="llrrrrl")
     print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 13
+    problem = 13
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    13. Report PSNR against your reference for both methods, over the whole frame, and then
+    again over the middle of the frame only, with a margin of a few pixels excluded on every
+    side. State the peak value you used in the caption.
+    '''
+    PEAK = 1.0      # reference is linear light normalized so saturation = 1 (Problem 2)
+    MARGIN = 4      # px; twice the 2-px reach of the 5x5 MHC kernels
+    # bilinear and mhc are the Problem 6 / 7 outputs on the re-mosaicked reference.
+    psnr_table = {name: (dm.psnr(img, reference, PEAK), dm.psnr(img, reference, PEAK, MARGIN))
+                  for name, img in [("Bilinear", bilinear), ("Malvar-He-Cutler", mhc)]}
+    print(f"DELIVERABLE {problem:02d}: PSNR vs reference (dB), peak {PEAK}, "
+          f"{reference.shape[1]}x{reference.shape[0]} reference")
+    print(f"\t{'method':20s} {'whole frame':>12s} {f'middle ({MARGIN}-px margin)':>22s}")
+    for name, (whole, middle) in psnr_table.items():
+        print(f"\t{name:20s} {whole:12.2f} {middle:22.2f}")
+    gain_whole = psnr_table["Malvar-He-Cutler"][0] - psnr_table["Bilinear"][0]
+    gain_middle = psnr_table["Malvar-He-Cutler"][1] - psnr_table["Bilinear"][1]
+    print(f"\tMHC - bilinear: {gain_whole:+.2f} dB whole frame, {gain_middle:+.2f} dB middle")
+    print(f"\t(MHC unclipped; clipped to [0, 1] it scores "
+          f"{dm.psnr(np.clip(mhc, 0, 1), reference, PEAK):.2f} dB whole frame)")
+
+    latex_file = f"{output_path}{problem:02d}_psnr.txt"
+    names = list(psnr_table)
+    lf.generate_table([names,
+                       [f"{psnr_table[n][0]:.2f}" for n in names],
+                       [f"{psnr_table[n][1]:.2f}" for n in names]],
+                      ["Method", "Whole frame (dB)", f"Middle, {MARGIN}-px margin (dB)"],
+                      caption=f"PSNR of each demosaicer against the quarter-resolution "
+                              f"reference ({reference.shape[1]} $\\times$ {reference.shape[0]}), "
+                              f"computed in linear light over all three channels with peak "
+                              f"value {PEAK:g} (the saturation level after normalization). "
+                              f"Middle: {MARGIN} pixels excluded on every side. MHC output "
+                              f"is not clipped.",
+                      output_path=latex_file, VERBOSE=False, align="lrr")
+    print(f"\tLaTeX for the report: {latex_file}")
