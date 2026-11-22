@@ -215,7 +215,7 @@ if __name__ == "__main__":
     '''
     kernels = dm.mhc_full_kernels()
     assert np.allclose(kernels["R/B at G, column"], np.rot90(kernels["R/B at G, row"]))
-    print("DELIVERABLE {problem:02d}: the four MHC filters, shown x 8 (divide by 8 to apply). "
+    print(f"DELIVERABLE {problem:02d}: the four MHC filters, shown x 8 (divide by 8 to apply). "
           "Center tap at [2, 2].")
     for name, k in kernels.items():
         print(f"\n{name}   (sum = {k.sum():.3f})")
@@ -231,3 +231,31 @@ if __name__ == "__main__":
     lf.generate_matrix_grid({latex_labels[n]: k for n, k in kernels.items()},
                             scale=8, per_row=2, output_path=latex_file)
     print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 9
+    problem = 9
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    9. Show what the two algorithms produced, next to the reference.
+    '''
+    # Same crop as Problems 6 and 7 so the figures line up. Every panel gets the SAME
+    # display gains (gray-world from the reference), so a color difference between
+    # panels is a real demosaicing difference, not a per-panel balance choice.
+    gains = reference.reshape(-1, 3).mean(axis=0)
+    gains = gains[1] / gains
+    fig, ax = plt.subplots(1, 3, figsize=(13.5, 5.1), layout="constrained")
+    for a, (title, img) in zip(ax, [("Reference (truth)", reference),
+                                    ("Bilinear", bilinear),
+                                    ("Malvar-He-Cutler", mhc)]):
+        a.imshow(dm.display_rgb(img[sl] * gains), interpolation="nearest")
+        a.set_title(title)
+        a.axis("off")
+    fig.suptitle(f"Item {problem:02d}: demosaicing results, {crop_size}x{crop_size} crop at "
+                 f"row {r}, col {c} of {reference.shape[0]}x{reference.shape[1]}\n"
+                 f"same display balance on all three panels")
+    fig.savefig(f"{output_path}{problem:02d}_three_panel.png", bbox_inches="tight", dpi=150)
+    print(f"DELIVERABLE {problem:02d}: figure {output_path}{problem:02d}_three_panel.png")
+    if SHOW:
+        plt.show()
+    plt.close(fig)
