@@ -292,3 +292,18 @@ def test_restore_single_frame_noise_restores_variance():
     restored = dm.restore_single_frame_noise(quiet, model, rng)
     np.testing.assert_allclose(restored[..., 0].var(), model["b"], rtol=0.05)
     np.testing.assert_allclose(restored[..., 1].var(), model["b"] / 2, rtol=0.05)
+
+
+def test_noise_gain_values_and_meaning():
+    """Exact sums of squared weights, and that they really predict filtered-noise variance."""
+    bil, mhc = dm.bilinear_full_kernels(), dm.mhc_full_kernels()
+    expected = {"G at R/B": (1 / 4, 36 / 64), "R/B at G, row": (1 / 2, 63.5 / 64),
+                "R/B at G, column": (1 / 2, 63.5 / 64), "R at B / B at R": (1 / 4, 61 / 64)}
+    for name, (b, m) in expected.items():
+        assert np.isclose(dm.noise_gain(bil[name]), b)
+        assert np.isclose(dm.noise_gain(mhc[name]), m)
+        assert np.isclose(bil[name].sum(), 1.0)
+    # Filter white noise (var 1) with the MHC R-at-B kernel: output variance ~ 61/64.
+    noise = np.random.default_rng(18).normal(0, 1, (1000, 1000))
+    out = correlate(noise, mhc["R at B / B at R"], mode="constant")[3:-3, 3:-3]
+    assert abs(out.var() - 61 / 64) < 0.01

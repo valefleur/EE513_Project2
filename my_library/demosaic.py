@@ -473,6 +473,45 @@ def mhc_full_kernels():
     }
 
 
+def bilinear_full_kernels():
+    """Bilinear's filters for the same four cases as mhc_full_kernels(), on 5x5 grids.
+
+    Bilinear has no center tap and no correction: only the missing channel's own
+    neighbors, each weighted equally. Keys match mhc_full_kernels() so the two
+    can be compared case by case.
+
+    Returns
+    -------
+    dict str -> float array (5, 5). Each sums to 1.
+    """
+    bil_cross = _pad5([[0, 1, 0], [1, 0, 1], [0, 1, 0]]) / 4
+    bil_row = _pad5([[0, 0, 0], [1, 0, 1], [0, 0, 0]]) / 2
+    bil_diag = _pad5([[1, 0, 1], [0, 0, 0], [1, 0, 1]]) / 4
+    return {"G at R/B": bil_cross,
+            "R/B at G, row": bil_row,
+            "R/B at G, column": bil_row.T,
+            "R at B / B at R": bil_diag}
+
+
+def noise_gain(kernel):
+    """White-noise power gain of a linear filter: the sum of its squared weights.
+
+    For out = sum_i w_i x_i with independent noise of variance sigma^2 in every
+    x_i, var(out) = sigma^2 * sum_i w_i^2. Equivalently (Parseval), the average
+    of |H(omega)|^2 over all frequencies. Weights of either sign add, so the
+    negative Laplacian taps in MHC add noise power rather than cancelling it.
+
+    Parameters
+    ----------
+    kernel : array, any shape.
+
+    Returns
+    -------
+    float, the factor multiplying the input noise variance.
+    """
+    return float(np.sum(np.asarray(kernel, float) ** 2))
+
+
 def compare_demosaic(mine, theirs, border=2):
     """Largest absolute difference between two demosaiced images, overall and in the interior.
 

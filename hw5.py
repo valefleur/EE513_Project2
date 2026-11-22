@@ -576,3 +576,41 @@ if __name__ == "__main__":
                               f"lower noise and {content_effect:+.2f} dB from the harder content.",
                       output_path=latex_file, VERBOSE=False, align="lllrrr")
     print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 16
+    problem = 16
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    16. Compare the gap between the two methods before and after, and explain what changed.
+    Adding up the squares of the weights in your filters will tell you most of it.
+    '''
+    # Noise variance out = noise variance in x sum of squared weights (independent noise).
+    bil_kernels, mhc_kernels = dm.bilinear_full_kernels(), dm.mhc_full_kernels()
+    gains = {n: (dm.noise_gain(bil_kernels[n]), dm.noise_gain(mhc_kernels[n]))
+             for n in mhc_kernels}
+    print(f"DELIVERABLE {problem:02d}: noise gain = sum of squared filter weights")
+    print(f"\t{'missing value':18s} {'bilinear':>9s} {'MHC':>9s} {'MHC / bil':>10s} {'in dB':>7s}")
+    for n, (b, m) in gains.items():
+        print(f"\t{n:18s} {b:9.4f} {m:9.4f} {m / b:9.2f}x {10 * np.log10(m / b):+7.1f}")
+    print(f"\tMHC - bilinear gap: {gap(psnr_table):+.2f} dB single frame (P13), "
+          f"{gap(quiet_psnr):+.2f} dB quieter (P15), middle of frame")
+    print("\tHalving the noise std quarters the noise variance, and with it MHC's 2-4x larger\n"
+          "\tnoise penalty; Problem 15b splits the swing into noise and content parts.")
+
+    latex_file = f"{output_path}{problem:02d}_noise_gain.txt"
+    names = list(gains)
+    lf.generate_table([names,
+                       [f"{gains[n][0]:.4f}" for n in names],
+                       [f"{gains[n][1]:.4f}" for n in names],
+                       [f"{gains[n][1] / gains[n][0]:.2f}$\\times$" for n in names],
+                       [f"{10 * np.log10(gains[n][1] / gains[n][0]):+.1f}" for n in names]],
+                      ["Missing value", "Bilinear", "MHC", "MHC / bilinear", "dB"],
+                      caption="Noise gain of each demosaicing filter: the sum of its squared "
+                              "weights, by which it multiplies independent input noise "
+                              "variance ($\\mathrm{var}(\\sum_i w_i x_i) = \\sigma^2 \\sum_i "
+                              "w_i^2$). MHC's negative Laplacian taps add noise power rather "
+                              "than averaging it away.",
+                      output_path=latex_file, VERBOSE=False, align="lrrrr")
+    print(f"\tLaTeX for the report: {latex_file}")
+
