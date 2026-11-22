@@ -379,7 +379,7 @@ def mhc_correction_planes(mosaic, border=2):
     return planes
 
 
-def mhc_demosaic(mosaic, border=2):
+def mhc_demosaic(mosaic, border=2, clip=False):
     """Malvar-He-Cutler demosaic: bilinear plus a scaled Laplacian of the measured channel.
 
     Idea: within a few pixels, the DIFFERENCE between color channels (e.g. R - G)
@@ -406,11 +406,15 @@ def mhc_demosaic(mosaic, border=2):
     ----------
     mosaic : float array (H, W), RGGB, linear light.
     border : int, frame width that falls back to bilinear (see mhc_correction_planes).
+    clip : bool, default False. The negative taps overshoot past strong edges and
+        next to clipped highlights, so outputs can fall outside [0, 1]. False keeps
+        the overshoot, which is what later linear stages (color matrix, denoise)
+        should see; clip once at display/encode time. True clips to [0, 1], matching
+        the Lecture 7 reference mhc_demosaic in make_figures_07.py.
 
     Returns
     -------
-    float array (H, W, 3), R, G, B. NOT clipped: the negative taps can push a
-    value slightly outside [0, 1] near strong edges (overshoot). Clip before display.
+    float array (H, W, 3), R, G, B; in [0, 1] only if clip=True.
     """
     mosaic = np.asarray(mosaic, dtype=float)
     base = bilinear_demosaic(mosaic)
@@ -423,7 +427,8 @@ def mhc_demosaic(mosaic, border=2):
     g_corr = np.where(s["R"] | s["B"], c["rb"], zero)
     b_corr = np.where(s["G2"], c["row"], zero) + np.where(s["G1"], c["col"], zero) \
         + np.where(s["R"], c["diag"], zero)
-    return base + np.stack([r_corr, g_corr, b_corr], axis=-1)
+    out = base + np.stack([r_corr, g_corr, b_corr], axis=-1)
+    return np.clip(out, 0.0, 1.0) if clip else out
 
 
 def _pad5(k3):

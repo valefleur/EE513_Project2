@@ -284,8 +284,8 @@ if __name__ == "__main__":
     # Professor's MHC clips to [0, 1] on return and mine does not, so clip mine to compare
     # like with like; the unclipped figure shows how much of the gap is just that.
     results = {"bilinear": dm.compare_demosaic(mine_bil, professors_bil),
-               "MHC (mine clipped to [0, 1])": dm.compare_demosaic(np.clip(mine_mhc, 0, 1),
-                                                                   professors_mhc),
+               "MHC (mine clipped to [0, 1])": dm.compare_demosaic(
+                   dm.mhc_demosaic(linear_rggb, clip=True), professors_mhc),
                "MHC (mine unclipped)": dm.compare_demosaic(mine_mhc, professors_mhc)}
     print(f"DELIVERABLE {problem:02d}: largest |mine - McNames'| (linear light, full scale = 1)")
     print(f"\t{'method':30s} {'whole frame':>12s} {'at (row, col, ch)':>20s} "

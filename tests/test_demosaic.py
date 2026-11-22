@@ -180,5 +180,35 @@ def test_matches_lecture7_reference_implementations():
     mos = dm.mosaic_reference(rng.random((40, 52, 3)))
     bil = dm.compare_demosaic(dm.bilinear_demosaic(mos), mf.bilinear_demosaic(mos))
     assert bil["max_all"] < 1e-12
-    mhc = dm.compare_demosaic(np.clip(dm.mhc_demosaic(mos), 0, 1), mf.mhc_demosaic(mos))
+    mhc = dm.compare_demosaic(dm.mhc_demosaic(mos, clip=True), mf.mhc_demosaic(mos))
     assert mhc["max_interior"] < 1e-12
+
+
+def test_mhc_border_difference_is_only_the_border_rule():
+    """Problem 11: separate a border disagreement from an algorithm disagreement.
+    Pad the mosaic by 2 with np.pad 'reflect', which mirrors ABOUT the edge pixel
+    (row -1 = row 1, row -2 = row 2) and so keeps every padded site its correct Bayer
+    color. Both implementations then see the same, phase-correct context, every
+    original pixel is 'interior', and they must agree to rounding everywhere,
+    edge rows included."""
+    mf = pytest.importorskip("make_figures_07")
+    rng = np.random.default_rng(11)
+    mos = dm.mosaic_reference(rng.random((40, 52, 3)))
+    p = 2
+    padded = np.pad(mos, p, mode="reflect")
+    crop = (slice(p, -p), slice(p, -p))
+    mine = dm.mhc_demosaic(padded, clip=True)[crop]
+    theirs = mf.mhc_demosaic(padded)[crop]
+    assert dm.compare_demosaic(mine, theirs)["max_all"] < 1e-12
+    # And without the shared padding the edge DOES disagree, so the test is not vacuous.
+    unpadded = dm.compare_demosaic(dm.mhc_demosaic(mos, clip=True), mf.mhc_demosaic(mos))
+    assert unpadded["max_all"] > 1e-3 and unpadded["in_border"]
+
+
+def test_mhc_clip_flag():
+    """Default keeps the overshoot; clip=True is exactly np.clip of the default."""
+    rng = np.random.default_rng(12)
+    mos = dm.mosaic_reference(rng.random((30, 34, 3)))
+    raw = dm.mhc_demosaic(mos)
+    assert raw.min() < 0 or raw.max() > 1          # random data overshoots
+    np.testing.assert_array_equal(dm.mhc_demosaic(mos, clip=True), np.clip(raw, 0, 1))
