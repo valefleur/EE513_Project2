@@ -450,9 +450,9 @@ if __name__ == "__main__":
         print(f"\tMHC - bilinear, {label:18s}: "
               f"{table['Malvar-He-Cutler'][0] - table['Bilinear'][0]:+.2f} dB whole, "
               f"{table['Malvar-He-Cutler'][1] - table['Bilinear'][1]:+.2f} dB middle")
-    print("\tCaution: averaging also halves the resolution, so scene detail is finer relative\n"
-          "\tto the pixel grid. Both the noise and the difficulty changed; the MHC - bilinear\n"
-          "\tgap, not either absolute PSNR, is the number to interpret.")
+    print("\tCaution: averaging also halves the resolution. The finest detail is averaged away\n"
+          "\tand what remains spans fewer pixels, which makes demosaicing harder. Both the noise\n"
+          "\tand the difficulty changed; Problem 15b separates the two.")
 
     latex_file = f"{output_path}{problem:02d}_psnr_quieter.txt"
     names = list(quiet_psnr)
@@ -468,8 +468,111 @@ if __name__ == "__main__":
                               f"single-frame reference of Problem 13 ({reference.shape[1]} "
                               f"$\\times$ {reference.shape[0]}). Quieter: that reference "
                               f"box-averaged by 2 ({quiet_reference.shape[1]} $\\times$ "
-                              f"{quiet_reference.shape[0]}), halving the noise standard "
-                              f"deviation, then re-mosaicked and demosaiced again. Middle: "
+                              f"{quiet_reference.shape[0]}), which halves the noise standard "
+                              f"deviation and also the resolution, so the remaining detail "
+                              f"spans fewer pixels and is harder to demosaic; then "
+                              f"re-mosaicked and demosaiced again. Middle: "
                               f"{MARGIN} pixels excluded on every side.",
                       output_path=latex_file, VERBOSE=False, align="lrrrr")
+    print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 15b (extra): separate the two things Problem 15 changed at once
+    problem = "15b"
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} (extra) ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    Problem 15 halved the noise AND made the content harder (half the resolution). Here a third
+    reference changes only one of them: the quieter reference's content with the single frame's
+    noise added back. Comparing the MHC - bilinear gap across the three references splits the
+    Problem 15 change exactly into a noise part and a content part:
+        gap(quiet) - gap(single) = [gap(quiet) - gap(restored)] + [gap(restored) - gap(single)]
+                                         noise effect                   content effect
+    '''
+    # 1. Noise model from this raw frame (G1 minus its 4 diagonal G2 neighbors).
+    noise_model = dm.estimate_noise_model(linear_rggb)
+    print(f"\tnoise model from G1 vs diagonal G2: var(s) = {noise_model['a']:.3e} * s + "
+          f"{noise_model['b']:.3e}   (s in linear light, full scale 1)")
+    print(f"\t  noise std at s = 0.1: {np.sqrt(noise_model['a'] * 0.1 + noise_model['b']):.4f}, "
+          f"at s = 0.5: {np.sqrt(noise_model['a'] * 0.5 + noise_model['b']):.4f}")
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.2), layout="constrained")
+    ax.plot(noise_model["signal"], noise_model["variance"], "o", label="binned estimate, G1 vs diagonal G2")
+    s_line = np.linspace(0, noise_model["signal"].max(), 100)
+    ax.plot(s_line, noise_model["a"] * s_line + noise_model["b"], "-",
+            label=f"fit: {noise_model['a']:.2e} s + {noise_model['b']:.2e}")
+    ax.set_xlabel("signal s (linear light, saturation = 1)")
+    ax.set_ylabel("noise variance per pixel")
+    ax.set_title(f"Item {problem}: noise model from one raw frame")
+    ax.legend()
+    fig.savefig(f"{output_path}{problem}_noise_model.png", dpi=150)
+    if SHOW:
+        plt.show()
+    plt.close(fig)
+    print(f"\tfigure: {output_path}{problem}_noise_model.png")
+
+    # 2. Quieter content, single-frame noise. Several seeds, so the added noise's own
+    #    randomness shows up as a spread instead of hiding in one number.
+    SEEDS = range(5)
+    restored_psnr = {"Bilinear": [], "Malvar-He-Cutler": []}
+    for seed in SEEDS:
+        restored_reference = dm.restore_single_frame_noise(
+            quiet_reference, noise_model, np.random.default_rng(seed))
+        restored_mosaic = dm.mosaic_reference(restored_reference)
+        restored_psnr["Bilinear"].append(dm.psnr(
+            dm.bilinear_demosaic(restored_mosaic), restored_reference, PEAK, MARGIN))
+        restored_psnr["Malvar-He-Cutler"].append(dm.psnr(
+            dm.mhc_demosaic(restored_mosaic), restored_reference, PEAK, MARGIN))
+    restored_psnr = {n: np.array(v) for n, v in restored_psnr.items()}
+    restored_gaps = restored_psnr["Malvar-He-Cutler"] - restored_psnr["Bilinear"]
+
+    # 3. Gaps (MHC - bilinear), middle of frame, for the three references.
+    gap = lambda t: t["Malvar-He-Cutler"][1] - t["Bilinear"][1]
+    gap_single, gap_quiet = gap(psnr_table), gap(quiet_psnr)
+    gap_restored, gap_restored_sd = restored_gaps.mean(), restored_gaps.std(ddof=1)
+    noise_effect = gap_quiet - gap_restored
+    content_effect = gap_restored - gap_single
+
+    rows = [("single frame (P13)", "easier", "full",
+             psnr_table["Bilinear"][1], 0.0, psnr_table["Malvar-He-Cutler"][1], 0.0,
+             gap_single, 0.0),
+            ("restored noise (15b)", "harder", "full",
+             restored_psnr["Bilinear"].mean(), restored_psnr["Bilinear"].std(ddof=1),
+             restored_psnr["Malvar-He-Cutler"].mean(),
+             restored_psnr["Malvar-He-Cutler"].std(ddof=1), gap_restored, gap_restored_sd),
+            ("quieter (P15)", "harder", "half",
+             quiet_psnr["Bilinear"][1], 0.0, quiet_psnr["Malvar-He-Cutler"][1], 0.0,
+             gap_quiet, 0.0)]
+    pm = lambda v, sd: f"{v:6.2f}" + (f" +/- {sd:.2f}" if sd else " " * 8)
+    print(f"DELIVERABLE {problem}: PSNR (dB, middle, {MARGIN}-px margin) and MHC - bilinear gap")
+    print(f"\t{'reference':22s} {'content':8s} {'noise':6s} {'bilinear':>15s} "
+          f"{'MHC':>15s} {'MHC - bil':>15s}")
+    for name, content, noise, b, bsd, m, msd, g, gsd in rows:
+        print(f"\t{name:22s} {content:8s} {noise:6s} {pm(b, bsd):>15s} {pm(m, msd):>15s} "
+              f"{pm(g, gsd):>15s}")
+    print(f"\tchange in gap, single -> quieter: {gap_quiet - gap_single:+.2f} dB"
+          f"\n\t  noise effect   (restored -> quieter, content fixed): {noise_effect:+.2f} dB"
+          f"\n\t  content effect (single -> restored, noise fixed):    {content_effect:+.2f} dB"
+          f"\n\t  (+/- {gap_restored_sd:.2f} dB from the added noise, std over {len(SEEDS)} seeds)")
+
+    latex_file = f"{output_path}{problem}_noise_vs_content.txt"
+    texpm = lambda v, sd: f"{v:.2f}" + (f" $\\pm$ {sd:.2f}" if sd else "")
+    lf.generate_table([[r[0].replace("(P13)", "(Problem 13)").replace("(P15)", "(Problem 15)")
+                        for r in rows],
+                       [r[1] for r in rows], [r[2] for r in rows],
+                       [texpm(r[3], r[4]) for r in rows], [texpm(r[5], r[6]) for r in rows],
+                       [texpm(r[7], r[8]) for r in rows]],
+                      ["Reference", "Content", "Noise", "Bilinear", "MHC", "MHC $-$ bilinear"],
+                      caption=f"Separating noise from content difficulty. PSNR in dB against each "
+                              f"row's own reference, peak {PEAK:g}, {MARGIN}-px margin excluded. "
+                              f"Restored noise: the Problem 15 reference with Gaussian noise "
+                              f"added back to the single-frame level, using the model "
+                              f"$\\sigma^2(s) = {lf.latex_sci(noise_model['a']).strip('$')}\\,s + "
+                              f"{lf.latex_sci(noise_model['b']).strip('$')}$ "
+                              f"fitted in the same raw frame from each G1 site minus the mean of its "
+                              f"four diagonal G2 neighbors; "
+                              f"mean $\\pm$ standard deviation over {len(SEEDS)} noise seeds. Of "
+                              f"the {gap_quiet - gap_single:+.2f} dB change in the gap from "
+                              f"single frame to quieter, {noise_effect:+.2f} dB comes from the "
+                              f"lower noise and {content_effect:+.2f} dB from the harder content.",
+                      output_path=latex_file, VERBOSE=False, align="lllrrr")
     print(f"\tLaTeX for the report: {latex_file}")

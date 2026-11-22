@@ -582,9 +582,10 @@ def box_downsample(image, factor=2):
     If the noise in each pixel is independent with standard deviation sigma,
     the mean of n = factor^2 pixels has standard deviation sigma / sqrt(n):
     factor 2 averages 4 pixels and halves the noise. The cost is resolution:
-    the output is 1/factor the size in each direction, so scene detail becomes
-    finer relative to the pixel grid. Rows/columns that do not fill a whole
-    block are dropped.
+    the output is 1/factor the size in each direction. The finest scene detail
+    is averaged away, and what remains spans fewer pixels (higher spatial
+    frequency in cycles per pixel), which makes demosaicing harder. Rows/columns
+    that do not fill a whole block are dropped.
 
     Parameters
     ----------
@@ -599,3 +600,96 @@ def box_downsample(image, factor=2):
     h, w = (x.shape[0] // factor) * factor, (x.shape[1] // factor) * factor
     x = x[:h, :w]
     return x.reshape(h // factor, factor, w // factor, factor, *x.shape[2:]).mean(axis=(1, 3))
+
+
+# ---------------------------------------------------------------------------
+# Separating noise from content difficulty (HW5 item 15b)
+# ---------------------------------------------------------------------------
+
+def estimate_noise_model(mosaic_rggb, n_bins=24, max_signal=0.9):
+    """Fit a signal-dependent noise model  var(s) = a * s + b  from ONE raw frame.
+
+    Each G1 site (red row) has four diagonal neighbors, all G2 sites (blue row),
+    one pixel away. Comparing a G1 value with the mean of those four:
+
+        d = G1 - (G2_nw + G2_ne + G2_sw + G2_se) / 4
+
+    cancels the scene wherever it is locally flat OR a linear slope, so d is
+    mostly noise even in textured areas. With independent noise of variance
+    sigma^2 per pixel,  var(d) = sigma^2 + 4 * sigma^2 / 16 = 1.25 sigma^2.
+    (The simpler G1 - G2 pair cancels only flat regions: on a textured test
+    image it overestimated the shot-noise slope by about 60%.)
+
+    The noise grows with the signal (photon shot noise, the "a * s" term) on
+    top of a constant floor (read noise, "b"): the Poisson-Gaussian model from
+    Project 1, in linear units. Pixels are binned by signal s; in each bin
+    sigma^2 is estimated robustly from the median absolute deviation,
+        sigma^2 = (1.4826 * MAD(d))^2 / 1.25,
+    so edges (large |d| at a few pixels) barely move it. A weighted straight-
+    line fit through the bins gives a and b. Every pixel of a Bayer sensor has
+    the same gain, so the same model applies to R and B in these
+    (pre-white-balance) linear units.
+
+    Parameters
+    ----------
+    mosaic_rggb : float array (H, W), RGGB, linear light, one raw frame.
+    n_bins : int, number of signal bins (equal pixel counts per bin).
+    max_signal : float, bins above this are dropped (clipping near saturation
+        squeezes the noise and would bias the fit).
+
+    Returns
+    -------
+    dict with "a", "b" (var = a*s + b), and "signal", "variance", "count"
+    per bin, for plotting the fit.
+    """
+    m = np.asarray(mosaic_rggb, float)
+    h, w = (m.shape[0] // 2) * 2, (m.shape[1] // 2) * 2
+    center = m[2:h - 2:2, 3:w - 1:2]                     # G1 sites, 2 px from the edge
+    neighbors = (m[1:h - 3:2, 2:w - 2:2] + m[1:h - 3:2, 4:w:2]
+                 + m[3:h - 1:2, 2:w - 2:2] + m[3:h - 1:2, 4:w:2]) / 4
+    s, d = ((center + neighbors) / 2).ravel(), (center - neighbors).ravel()
+    keep = s < max_signal
+    s, d = s[keep], d[keep]
+    edges = np.quantile(s, np.linspace(0, 1, n_bins + 1))
+    idx = np.clip(np.searchsorted(edges, s, side="right") - 1, 0, n_bins - 1)
+    sig, var, cnt = [], [], []
+    for k in range(n_bins):
+        dk = d[idx == k]
+        if dk.size < 100:
+            continue
+        mad = np.median(np.abs(dk - np.median(dk)))
+        sig.append(s[idx == k].mean())
+        var.append((1.4826 * mad) ** 2 / 1.25)
+        cnt.append(dk.size)
+    sig, var, cnt = map(np.asarray, (sig, var, cnt))
+    a, b = np.polyfit(sig, var, 1, w=np.sqrt(cnt) / np.maximum(var, 1e-30))
+    return {"a": float(a), "b": float(b), "signal": sig, "variance": var, "count": cnt}
+
+
+def restore_single_frame_noise(quiet_reference, model, rng):
+    """Add noise to a 2x2 box-averaged reference until it is as noisy as the original.
+
+    In the single-frame reference, R and B are single pixels with variance
+    var(s) = a*s + b, and G is the mean of two pixels with var(s)/2. Box-averaging
+    4 such reference pixels divides each variance by 4. Adding independent
+    Gaussian noise with the missing 3/4 brings it back:
+
+        var_quiet + 3/4 var_ref = 1/4 var_ref + 3/4 var_ref = var_ref
+
+    The result has the quiet reference's (harder) content but the single
+    frame's noise level, so it changes one factor at a time.
+
+    Parameters
+    ----------
+    quiet_reference : float array (H, W, 3), from box_downsample(reference, 2).
+    model : dict from estimate_noise_model().
+    rng : numpy Generator (fix the seed for reproducibility).
+
+    Returns
+    -------
+    float array (H, W, 3).
+    """
+    q = np.asarray(quiet_reference, float)
+    var_ref = np.maximum(model["a"] * q + model["b"], 0.0)
+    var_ref[..., 1] /= 2                      # G in the reference is a mean of two pixels
+    return q + rng.normal(0.0, 1.0, q.shape) * np.sqrt(0.75 * var_ref)

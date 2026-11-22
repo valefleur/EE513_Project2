@@ -262,3 +262,33 @@ def test_box_downsample_shape_values_and_noise():
     # Independent noise: std halves (4 samples averaged), within sampling error.
     noise = np.random.default_rng(15).normal(0, 1.0, (800, 800))
     assert abs(dm.box_downsample(noise).std() - 0.5) < 0.01
+
+
+def test_estimate_noise_model_recovers_known_model():
+    """Smooth scene + known Poisson-Gaussian-like noise: the fit must find a and b."""
+    rng = np.random.default_rng(16)
+    a_true, b_true = 2e-4, 1e-6
+    y, x = np.mgrid[0:800, 0:800]
+    clean = 0.05 + 0.8 * (x / 800.0)                     # smooth ramp, many signal levels
+    noisy = clean + rng.normal(0, 1, clean.shape) * np.sqrt(a_true * clean + b_true)
+    fit = dm.estimate_noise_model(noisy)
+    assert abs(fit["a"] - a_true) / a_true < 0.05
+    assert abs(fit["b"] - b_true) < 2e-6
+
+    # Same noise on a TEXTURED scene: the gradient-cancelling estimator must still hold.
+    textured = clean + 0.1 * np.sin(x * y / 12000.0)
+    noisy_t = textured + rng.normal(0, 1, clean.shape) * np.sqrt(a_true * textured + b_true)
+    fit_t = dm.estimate_noise_model(noisy_t)
+    assert abs(fit_t["a"] - a_true) / a_true < 0.10
+
+
+def test_restore_single_frame_noise_restores_variance():
+    """Box-average independent noise (var/4), restore 3/4: total variance back to var."""
+    rng = np.random.default_rng(17)
+    model = {"a": 0.0, "b": 1e-4}                         # flat noise for a clean check
+    ref = 0.5 + rng.normal(0, 1, (600, 600, 3)) * np.sqrt(model["b"])
+    ref[..., 1] = 0.5 + rng.normal(0, 1, (600, 600)) * np.sqrt(model["b"] / 2)
+    quiet = dm.box_downsample(ref)
+    restored = dm.restore_single_frame_noise(quiet, model, rng)
+    np.testing.assert_allclose(restored[..., 0].var(), model["b"], rtol=0.05)
+    np.testing.assert_allclose(restored[..., 1].var(), model["b"] / 2, rtol=0.05)
