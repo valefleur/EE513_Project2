@@ -228,3 +228,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Created on import by make_figures_07.py (Prof. McNames)
+Figures/

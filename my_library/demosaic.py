@@ -466,3 +466,34 @@ def mhc_full_kernels():
         "R/B at G, column": bil_row.T + MHC_BETA * LAP_G_COL,
         "R at B / B at R": bil_diag + MHC_GAMMA * LAP_RB,
     }
+
+
+def compare_demosaic(mine, theirs, border=2):
+    """Largest absolute difference between two demosaiced images, overall and in the interior.
+
+    Demosaicers usually agree in the interior and differ only in how they treat
+    the frame edge, so the two numbers separate "the algorithm differs" from
+    "the border rule differs".
+
+    Parameters
+    ----------
+    mine, theirs : float arrays (H, W, 3), same shape.
+    border : int, width of the frame excluded from the interior figure
+        (2 for 5x5 MHC kernels).
+
+    Returns
+    -------
+    dict with
+        "max_all"      : max |mine - theirs| over the whole image
+        "where"        : (row, col, channel) of that maximum
+        "in_border"    : True if that maximum lies within ``border`` of the edge
+        "max_interior" : max |mine - theirs| with the border frame excluded
+    """
+    d = np.abs(np.asarray(mine, float) - np.asarray(theirs, float))
+    where = np.unravel_index(int(np.argmax(d)), d.shape)
+    h, w = d.shape[:2]
+    in_border = not (border <= where[0] < h - border and border <= where[1] < w - border)
+    return {"max_all": float(d.max()),
+            "where": tuple(int(i) for i in where),
+            "in_border": in_border,
+            "max_interior": float(d[border:h - border, border:w - border].max())}

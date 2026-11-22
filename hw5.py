@@ -6,7 +6,12 @@ import matplotlib.pyplot as plt
 
 import psu_imaging as psu
 import my_library.demosaic as dm
+import my_library.linear_light as ll
 import my_library.latex_formatter as lf
+# Reference demosaicers from the Lecture 7 slides, by Professor James McNames (Canvas,
+# Slides folder). Importing it creates an empty Figures/ folder next to it and calls
+# np.seterr(divide/over/invalid='ignore') for the whole process.
+import make_figures_07 as mf
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
 
 SHOW = True
@@ -259,3 +264,35 @@ if __name__ == "__main__":
     if SHOW:
         plt.show()
     plt.close(fig)
+
+
+    # Problem 10
+    problem = 10
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    10. Check both of your implementations against the reference ones in make_figures.py from
+    the lecture 7 slides, which are bilinear_demosaic and mhc_demosaic. They assume an RGGB
+    mosaic, so feed them the aligned version from item 1.
+    '''
+    # Input: the item-1 aligned RGGB mosaic, full resolution, in linear light [0, 1]
+    # (The professor's functions expect normalized floats, not DN).
+    linear_rggb = ll.raw_to_linear_light(rggb, black, saturation, clip=True)
+    print(f"\tinput: aligned RGGB mosaic from item 1, {linear_rggb.shape}, linear light")
+
+    mine_bil, professors_bil = dm.bilinear_demosaic(linear_rggb), mf.bilinear_demosaic(linear_rggb)
+    mine_mhc, professors_mhc = dm.mhc_demosaic(linear_rggb), mf.mhc_demosaic(linear_rggb)
+    # Professor's MHC clips to [0, 1] on return and mine does not, so clip mine to compare
+    # like with like; the unclipped figure shows how much of the gap is just that.
+    results = {"bilinear": dm.compare_demosaic(mine_bil, professors_bil),
+               "MHC (mine clipped to [0, 1])": dm.compare_demosaic(np.clip(mine_mhc, 0, 1),
+                                                                   professors_mhc),
+               "MHC (mine unclipped)": dm.compare_demosaic(mine_mhc, professors_mhc)}
+    print(f"DELIVERABLE {problem:02d}: largest |mine - McNames'| (linear light, full scale = 1)")
+    print(f"\t{'method':30s} {'whole frame':>12s} {'at (row, col, ch)':>20s} "
+          f"{'interior*':>12s}")
+    for name, res in results.items():
+        loc = f"{res['where']}{' border' if res['in_border'] else ''}"
+        print(f"\t{name:30s} {res['max_all']:12.3e} {loc:>20s} {res['max_interior']:12.3e}")
+    print("\t* interior excludes the 2-pixel frame. Inside it the methods differ only in the\n"
+          "\t  border rule: mine falls back to bilinear there; professors uses cv2.BORDER_REFLECT,\n"
+          "\t  which copies row 0 into row -1 and so breaks the Bayer phase for 5x5 kernels.")

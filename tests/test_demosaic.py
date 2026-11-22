@@ -167,3 +167,18 @@ def test_latex_numbers_are_exact():
     import my_library.latex_formatter as lf
     assert [lf.latex_number(v) for v in (4, -1, 0, 0.5, -1.5)] == \
         ["4", "-1", "0", r"\tfrac{1}{2}", r"-\tfrac{3}{2}"]
+
+
+# ------------- against Professor McNames' reference implementations -------------
+def test_matches_lecture7_reference_implementations():
+    """make_figures_07.py (Prof. James McNames) is the trusted implementation.
+    Bilinear must match everywhere; MHC must match away from the 2-px border, where
+    the two border rules differ by design (see hw5.py Problem 10). Theirs clips to
+    [0, 1], so mine is clipped before comparing."""
+    mf = pytest.importorskip("make_figures_07")
+    rng = np.random.default_rng(10)
+    mos = dm.mosaic_reference(rng.random((40, 52, 3)))
+    bil = dm.compare_demosaic(dm.bilinear_demosaic(mos), mf.bilinear_demosaic(mos))
+    assert bil["max_all"] < 1e-12
+    mhc = dm.compare_demosaic(np.clip(dm.mhc_demosaic(mos), 0, 1), mf.mhc_demosaic(mos))
+    assert mhc["max_interior"] < 1e-12
