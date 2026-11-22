@@ -614,3 +614,93 @@ if __name__ == "__main__":
                       output_path=latex_file, VERBOSE=False, align="lrrrr")
     print(f"\tLaTeX for the report: {latex_file}")
 
+
+    # Problem 17
+    problem = 17
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    17. Now look at the images instead of the numbers. Find a near-vertical or near-horizontal edge
+    and show a magnified crop of it from both methods and from the reference, along with the
+    absolute error for each.
+    '''
+    # Layout follows fig_zippering() in make_figures_07.py (Prof. James McNames).
+    EDGE_SIZE = 48              # crop side, reference pixels
+    EDGE_CENTER = None          # None = strongest edge found; or (row, col) of a point on it
+    SINGLE_EDGE = True         # True = skip stripes (two parallel edges) and pick a lone edge
+    candidates = dm.find_straight_edges(reference, size=EDGE_SIZE, max_tilt_deg=10,
+                                        single_edge=SINGLE_EDGE)
+    print(f"\tstraight-edge candidates (structure tensor, within 10 deg of an axis; polarity "
+          f"near 1 = one edge, near 0 = two parallel edges of opposite sign):")
+    for k, cand in enumerate(candidates):
+        print(f"\t  {k}: center row {cand['center_row']:5d}, col {cand['center_col']:5d}  "
+              f"{cand['orientation']:10s} "
+              f"tilt {cand['tilt_deg']:+5.1f} deg  coherence {cand['coherence']:.2f}  "
+              f"polarity {cand['polarity']:.2f}")
+    if EDGE_CENTER is None:
+        edge = candidates[0]
+        center = (edge["center_row"], edge["center_col"])
+        what = "edge" if edge["single_edge"] else "edges (parallel pair)"
+        edge_note = f"{edge['orientation']} {what}, tilt {edge['tilt_deg']:+.1f} deg"
+    else:
+        center = EDGE_CENTER
+        edge_note = "edge chosen by hand"
+    # Crop centered on the edge, kept inside the frame.
+    er = int(np.clip(center[0] - EDGE_SIZE // 2, 0, reference.shape[0] - EDGE_SIZE))
+    ec = int(np.clip(center[1] - EDGE_SIZE // 2, 0, reference.shape[1] - EDGE_SIZE))
+    esl = (slice(er, er + EDGE_SIZE), slice(ec, ec + EDGE_SIZE))
+
+    # One display balance for every panel (as in Problem 9); errors in linear light.
+    display_gains = reference.reshape(-1, 3).mean(axis=0)
+    display_gains = display_gains[1] / display_gains
+    show = lambda img: dm.display_rgb(img[esl] * display_gains)
+    err_bil = np.abs(bilinear - reference)[esl].mean(axis=2)
+    err_mhc = np.abs(mhc - reference)[esl].mean(axis=2)
+    vmax = np.percentile(np.concatenate([err_bil.ravel(), err_mhc.ravel()]), 99.5)
+    err_norm = plt.Normalize(vmin=0, vmax=vmax)
+    err_rgb = lambda e: plt.get_cmap("magma")(err_norm(e))[..., :3]
+
+    # Magnify by an exact integer and place each panel with fig.figimage at native size, so
+    # every image pixel is a ZOOM x ZOOM block of figure pixels: no display resampling.
+    ZOOM, DPI = 8, 100
+    P = EDGE_SIZE * ZOOM                               # panel side, figure pixels
+    GAP, VGAP, LEFT, TOP, TITLE, CBAR, BOTTOM = 30, 24, 20, 80, 28, 130, 20
+    W = LEFT + 3 * P + 2 * GAP + CBAR
+    H = TOP + 2 * (TITLE + P) + VGAP + BOTTOM
+    fig = plt.figure(figsize=(W / DPI, H / DPI), dpi=DPI)
+    panel_y = [H - TOP - TITLE - P, BOTTOM]           # bottom edges of the two rows
+    panel_x = [LEFT + k * (P + GAP) for k in range(3)]
+    title_at = lambda x, y, text: fig.text((x + P / 2) / W, (y + P + 6) / H, text,
+                                           ha="center", va="bottom", fontsize=11)
+    for x, (title, img) in zip(panel_x, [("Reference (truth)", reference),
+                                         ("Bilinear", bilinear), ("Malvar-He-Cutler", mhc)]):
+        fig.figimage(dm.magnify(show(img), ZOOM), xo=x, yo=panel_y[0], origin="upper")
+        title_at(x, panel_y[0], title)
+    for x, (title, e) in zip(panel_x[1:], [("|error| bilinear", err_bil),
+                                           ("|error| MHC", err_mhc)]):
+        fig.figimage(dm.magnify(err_rgb(e), ZOOM), xo=x, yo=panel_y[1], origin="upper")
+        title_at(x, panel_y[1], f"{title}, mean {e.mean():.2e}")
+    # Bottom left: where the crop is (ordinary axes; the thumbnail may be resampled).
+    thumb = fig.add_axes([panel_x[0] / W, panel_y[1] / H, P / W, P / H])
+    thumb.imshow(dm.display_rgb(reference * display_gains))
+    thumb.add_patch(plt.Rectangle((ec, er), EDGE_SIZE, EDGE_SIZE, fill=False,
+                                  edgecolor="red", linewidth=1.5))
+    thumb.axis("off")
+    title_at(panel_x[0], panel_y[1], "Crop location (red box)")
+    cax = fig.add_axes([(panel_x[2] + P + 15) / W, panel_y[1] / H, 15 / W, P / H])
+    fig.colorbar(plt.cm.ScalarMappable(norm=err_norm, cmap="magma"), cax=cax,
+                 label="|error|, linear light (shared scale)")
+    fig.suptitle(f"Item {problem:02d}: {edge_note}, {EDGE_SIZE}x{EDGE_SIZE} crop at row {er}, "
+                 f"col {ec}, each pixel shown as a {ZOOM}x{ZOOM} block\n"
+                 f"same display balance on all panels; errors are mean |error| over R, G, B",
+                 y=1 - 12 / H, va="top")
+    # Same dpi and no tight bbox (make_figures_07 sets savefig.bbox="tight" globally), so the
+    # canvas is saved exactly as laid out and the panels are not shifted or rescaled.
+    with plt.rc_context({"savefig.bbox": "standard"}):
+        fig.savefig(f"{output_path}{problem:02d}_edge_crops.png", dpi=DPI)
+    if SHOW:
+        plt.show()
+    plt.close(fig)
+    print(f"DELIVERABLE {problem:02d}: {edge_note} at row {er}, col {ec}; mean |error| in crop: "
+          f"bilinear {err_bil.mean():.3e}, MHC {err_mhc.mean():.3e}; "
+          f"figure {output_path}{problem:02d}_edge_crops.png")
+

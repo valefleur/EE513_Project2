@@ -307,3 +307,43 @@ def test_noise_gain_values_and_meaning():
     noise = np.random.default_rng(18).normal(0, 1, (1000, 1000))
     out = correlate(noise, mhc["R at B / B at R"], mode="constant")[3:-3, 3:-3]
     assert abs(out.var() - 61 / 64) < 0.01
+
+
+@pytest.mark.parametrize("tilt, expect", [(4.0, "vertical"), (86.0, "horizontal")])
+def test_find_straight_edges_orientation_and_tilt(tilt, expect):
+    """A single straight edge tilted a few degrees from an axis is found and classified."""
+    y, x = np.mgrid[0:200, 0:200].astype(float)
+    t = np.radians(tilt)                           # edge angle from vertical
+    side = (x - 100) * np.cos(t) - (y - 100) * np.sin(t)
+    img = np.repeat((0.2 + 0.6 * (side > 0))[..., None], 3, axis=-1)
+    best = dm.find_straight_edges(img, size=48)[0]
+    assert best["orientation"] == expect
+    assert abs(abs(best["tilt_deg"]) - min(tilt, 90 - tilt)) < 2.0
+    # The reported center lies on the edge (within a couple of pixels).
+    t_r, t_c = best["center_row"], best["center_col"]
+    assert abs((t_c - 100) * np.cos(t) - (t_r - 100) * np.sin(t)) < 2.0
+
+
+def test_magnify_is_exact_blocks():
+    img = np.arange(6, dtype=float).reshape(2, 3)
+    big = dm.magnify(img, 4)
+    assert big.shape == (8, 12)
+    for i in range(2):
+        for j in range(3):
+            assert np.all(big[4 * i:4 * i + 4, 4 * j:4 * j + 4] == img[i, j])
+    assert dm.magnify(np.zeros((2, 2, 3)), 3).shape == (6, 6, 3)
+
+
+def test_find_straight_edges_polarity_separates_edge_from_stripe():
+    """One edge -> polarity near 1; a light stripe (two opposite edges) -> near 0, and
+    single_edge=True skips the stripe."""
+    y, x = np.mgrid[0:200, 0:200].astype(float)
+    edge = np.repeat((0.2 + 0.6 * (x > 100))[..., None], 3, axis=-1)
+    stripe = np.repeat((0.2 + 0.6 * ((x > 88) & (x < 112)))[..., None], 3, axis=-1)
+    e = dm.find_straight_edges(edge, size=48)[0]
+    st = dm.find_straight_edges(stripe, size=48)[0]
+    assert e["polarity"] > 0.9 and e["single_edge"]
+    assert st["polarity"] < 0.1 and not st["single_edge"]
+    assert st["orientation"] == "vertical"          # still found, still classified
+    assert all(c["single_edge"] for c in dm.find_straight_edges(stripe, size=48,
+                                                                single_edge=True))

@@ -278,6 +278,115 @@ def bilinear_demosaic(mosaic):
                      for c in range(3)], axis=-1)
 
 
+def magnify(image, factor):
+    """Enlarge an image by a whole-number factor, each pixel becoming a factor x factor block.
+
+        out[factor*i + a, factor*j + b] = image[i, j]   for 0 <= a, b < factor
+
+    Nearest-neighbor (zero-order hold) at an exact integer ratio: no new values
+    are invented and every block is the same size, so one-pixel patterns such
+    as zippering stay visible and uniform. For display only.
+
+    Parameters
+    ----------
+    image : array (H, W) or (H, W, C).
+    factor : int >= 1.
+
+    Returns
+    -------
+    array (factor*H, factor*W[, C]), same dtype.
+    """
+    return np.repeat(np.repeat(np.asarray(image), factor, axis=0), factor, axis=1)
+
+
+def find_straight_edges(rgb, size=48, max_tilt_deg=10.0, min_coherence=0.8, top=5,
+                        single_edge=False, min_polarity=0.7):
+    """Find windows whose edges are straight, parallel, and close to vertical or horizontal.
+
+    Uses the structure tensor of the green channel, summed over each window:
+
+        S = [[sum gx^2,  sum gx gy],      gx, gy = horizontal / vertical gradients
+             [sum gx gy, sum gy^2 ]]
+
+    Its eigenvectors give the window's dominant gradient direction, and
+        coherence = (l1 - l2) / (l1 + l2)   (eigenvalues l1 >= l2)
+    is near 1 when all the gradients are parallel and near 0 for texture or
+    noise. The tensor uses squared gradients, so it cannot tell a dark-to-light
+    edge from a light-to-dark one: one straight edge, a stripe (two parallel
+    edges of opposite sign) and a set of parallel edges all score as coherent.
+    The edge runs perpendicular to the gradient, so a gradient angle near 0 deg
+    is a near-VERTICAL edge and near 90 deg a near-HORIZONTAL one.
+
+    To tell those apart, polarity projects each gradient onto the dominant
+    direction u and compares the signed with the unsigned sum:
+        polarity = |sum (g . u)| / sum |g . u|
+    It is near 1 for a single edge (every step goes the same way) and near 0
+    for a stripe (the two edges cancel).
+
+    Windows are ranked by edge strength (l1 + l2) among those that are
+    coherent and within ``max_tilt_deg`` of either axis (and, if
+    ``single_edge``, have polarity >= ``min_polarity``).
+
+    Parameters
+    ----------
+    rgb : float array (H, W, 3), e.g. the reference.
+    size : int, window side in pixels (windows overlap by half).
+    max_tilt_deg : float, largest allowed angle between the edges and the axis.
+    min_coherence : float, 0-1.
+    top : int, how many candidates to return.
+    single_edge : bool, keep only windows holding one edge (high polarity).
+    min_polarity : float, 0-1, threshold used when ``single_edge`` is True.
+
+    Returns
+    -------
+    list of dicts, strongest first: "row", "col" (window top-left),
+    "center_row", "center_col" (gradient-energy-weighted center of the window,
+    for centering a crop; for a stripe this falls between its two edges),
+    "orientation" ("vertical" or "horizontal"), "tilt_deg" (edge angle from
+    that axis; approximate, within 1-2 deg on test edges, and its sign
+    follows the rows-increase-downward image convention), "coherence",
+    "polarity", "single_edge" (polarity >=
+    min_polarity), "strength".
+    """
+    g = np.asarray(rgb, float)[..., 1]
+    gy, gx = np.gradient(g)
+    step = size // 2
+    found = []
+    for r in range(0, g.shape[0] - size + 1, step):
+        for c in range(0, g.shape[1] - size + 1, step):
+            sl = (slice(r, r + size), slice(c, c + size))
+            sxx, syy, sxy = (gx[sl] ** 2).sum(), (gy[sl] ** 2).sum(), (gx[sl] * gy[sl]).sum()
+            strength = sxx + syy
+            if strength == 0:
+                continue
+            coherence = np.hypot(sxx - syy, 2 * sxy) / strength
+            grad_angle = np.degrees(0.5 * np.arctan2(2 * sxy, sxx - syy))   # -90..90
+            if abs(grad_angle) <= max_tilt_deg:
+                orientation, tilt = "vertical", grad_angle
+            elif abs(grad_angle) >= 90 - max_tilt_deg:
+                orientation, tilt = "horizontal", np.sign(grad_angle) * (90 - abs(grad_angle))
+            else:
+                continue
+            theta = np.radians(grad_angle)
+            proj = gx[sl] * np.cos(theta) + gy[sl] * np.sin(theta)
+            polarity = abs(proj.sum()) / max(np.abs(proj).sum(), 1e-30)
+            if single_edge and polarity < min_polarity:
+                continue
+            if coherence >= min_coherence:
+                energy = gx[sl] ** 2 + gy[sl] ** 2
+                rr, cc = np.mgrid[r:r + size, c:c + size]
+                found.append({"row": r, "col": c,
+                              "center_row": int(round((rr * energy).sum() / strength)),
+                              "center_col": int(round((cc * energy).sum() / strength)),
+                              "orientation": orientation,
+                              "tilt_deg": float(tilt), "coherence": float(coherence),
+                              "polarity": float(polarity),
+                              "single_edge": bool(polarity >= min_polarity),
+                              "strength": float(strength)})
+    found.sort(key=lambda d: d["strength"], reverse=True)
+    return found[:top]
+
+
 def busiest_crop(rgb, size=96):
     """(row, col) of the size x size window with the most green-channel detail.
 
