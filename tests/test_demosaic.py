@@ -150,3 +150,20 @@ def test_mhc_gain_shrinks_without_white_balance():
     bil, mhc = _shared_detail_errors([0.6, 1.0, 0.7])
     assert mhc < bil
     assert mhc / bil > mhc_wb / bil_wb
+
+
+def test_full_kernels_match_paper_and_rotation():
+    k = dm.mhc_full_kernels()
+    np.testing.assert_allclose(k["G at R/B"], _G_AT_RB, atol=1e-15)
+    np.testing.assert_allclose(k["R/B at G, row"], _ROW, atol=1e-15)
+    np.testing.assert_allclose(k["R/B at G, column"], _ROW.T, atol=1e-15)
+    np.testing.assert_allclose(k["R at B / B at R"], _DIAG, atol=1e-15)
+    np.testing.assert_allclose(k["R/B at G, column"], np.rot90(k["R/B at G, row"]), atol=1e-15)
+    for name, kern in k.items():
+        assert np.isclose(kern.sum(), 1.0), name
+
+
+def test_latex_numbers_are_exact():
+    import my_library.latex_formatter as lf
+    assert [lf.latex_number(v) for v in (4, -1, 0, 0.5, -1.5)] == \
+        ["4", "-1", "0", r"\tfrac{1}{2}", r"-\tfrac{3}{2}"]

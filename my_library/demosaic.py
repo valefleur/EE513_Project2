@@ -424,3 +424,45 @@ def mhc_demosaic(mosaic, border=2):
     b_corr = np.where(s["G2"], c["row"], zero) + np.where(s["G1"], c["col"], zero) \
         + np.where(s["R"], c["diag"], zero)
     return base + np.stack([r_corr, g_corr, b_corr], axis=-1)
+
+
+def _pad5(k3):
+    """Embed a 3x3 kernel in the center of a 5x5."""
+    k = np.zeros((5, 5))
+    k[1:4, 1:4] = k3
+    return k
+
+
+def mhc_full_kernels():
+    """The four complete MHC filters, assembled from the pieces mhc_demosaic() uses.
+
+    Each is (bilinear taps on the missing channel) + gain * (correction on the
+    measured channel), on one 5x5 grid. Built from the module constants rather
+    than retyped, so what is printed is what runs.
+
+        "G at R/B"           : bilinear cross        + alpha * LAP_RB
+        "R/B at G, row"      : bilinear left/right   + beta  * LAP_G_ROW
+        "R/B at G, column"   : bilinear up/down      + beta  * LAP_G_COL
+                               (= "row" rotated 90 degrees)
+        "R at B / B at R"    : bilinear 4 diagonals  + gamma * LAP_RB
+
+    These four cover all eight cases: G at R and G at B share one filter,
+    R at B and B at R share one, and the four "color at green" cases use the
+    row filter or its rotation depending on which way the missing color's
+    neighbors lie.
+
+    Returns
+    -------
+    dict str -> float array (5, 5). Each sums to 1 (flat areas pass unchanged).
+    """
+    bil_cross = _pad5([[0, 1, 0], [1, 0, 1], [0, 1, 0]]) / 4
+    bil_row = _pad5([[0, 0, 0], [1, 0, 1], [0, 0, 0]]) / 2
+    bil_diag = _pad5([[1, 0, 1], [0, 0, 0], [1, 0, 1]]) / 4
+    # The center tap belongs to the correction: bilinear has none, because the
+    # missing color was not measured there.
+    return {
+        "G at R/B": bil_cross + MHC_ALPHA * LAP_RB,
+        "R/B at G, row": bil_row + MHC_BETA * LAP_G_ROW,
+        "R/B at G, column": bil_row.T + MHC_BETA * LAP_G_COL,
+        "R at B / B at R": bil_diag + MHC_GAMMA * LAP_RB,
+    }

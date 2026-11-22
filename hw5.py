@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 import psu_imaging as psu
 import my_library.demosaic as dm
+import my_library.latex_formatter as lf
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
 
 SHOW = True
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         raw_dn = raw.raw_image_visible.copy()      # copy: the buffer dies when the file closes
     offset = dm.rggb_offset(pattern)
     rggb = dm.align_to_rggb(raw_dn, offset)
-    print(f"DELIVERABLE 01: {name}: CFA pattern {pattern}; offset {offset[0]} row, "
+    print(f"DELIVERABLE {problem:02d}: {name}: CFA pattern {pattern}; offset {offset[0]} row, "
           f"{offset[1]} column to put red at the top left. "
           f"Mosaic {raw_dn.shape} -> {rggb.shape}.")
 
@@ -105,8 +106,8 @@ if __name__ == "__main__":
     fig.suptitle(f"Quarter-resolution ground truth from {name}: "
                  f"{reference.shape[1]} x {reference.shape[0]}, no interpolation")
     fig.tight_layout()
-    fig.savefig(f"{output_path}02_reference.png", dpi=150)
-    print(f"DELIVERABLE 02: {output_path}02_reference.png")
+    fig.savefig(f"{output_path}{problem:02d}_reference.png", dpi=150)
+    print(f"DELIVERABLE {problem:02d}: {output_path}{problem:02d}_reference.png")
     if SHOW:
         plt.show()
     plt.close(fig)
@@ -118,15 +119,15 @@ if __name__ == "__main__":
     # Mosaic it back down, confirm the round trip
     mosaic = dm.mosaic_reference(reference)
     n = dm.assert_round_trip(reference, mosaic)
-    print(f"DELIVERABLE 03: round trip PASSED, {n:,} of {n:,} sampled sites equal the "
+    print(f"DELIVERABLE {problem:02d}: round trip PASSED, {n:,} of {n:,} sampled sites equal the "
           f"reference exactly (mosaic {mosaic.shape}, RGGB).")
 
 
-    # Problem 4
-    problem = 4
+    # Problem 6
+    problem = 6
     print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     '''
-    4. Implement bilinear demosaicing yourself. Interpolate each channel from its own measured
+    6. Implement bilinear demosaicing yourself. Interpolate each channel from its own measured
     neighbors, and take care at the frame border, where a pixel has fewer neighbors than it does
     in the middle.
     '''
@@ -153,21 +154,22 @@ if __name__ == "__main__":
         else:
             a.imshow(dm.display_rgb(img, balance=True)[sl], interpolation="nearest")
         a.set_title(title); a.axis("off")
-    fig.suptitle(f"Item 4: bilinear demosaic, {crop_size}x{crop_size} crop at row {r}, col {c} "
+    fig.suptitle(f"Item {problem}: bilinear demosaic, {crop_size}x{crop_size} crop at row {r}, col {c} "
                  f"(display balanced, numbers are not)")
-    fig.savefig(f"{output_path}04_bilinear.png", bbox_inches="tight", dpi=150)
-    print(f"DELIVERABLE 04: bilinear demosaic {bilinear.shape}; measured sites preserved; "
-          f"figure {output_path}04_bilinear.png")
+    # let problem have a leading zero so the files sort in order
+    fig.savefig(f"{output_path}{problem:02d}_bilinear.png", bbox_inches="tight", dpi=150)
+    print(f"DELIVERABLE {problem:02d}: bilinear demosaic {bilinear.shape}; measured sites preserved; "
+          f"figure {output_path}{problem:02d}_bilinear.png")
     if SHOW:
         plt.show()
     plt.close(fig)
 
 
-    # Problem 5
-    problem = 5
+    # Problem 7
+    problem = 7
     print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     '''
-    5. Implement Malvar, He and Cutler yourself. Start from bilinear and add the correction term
+    7. Implement Malvar, He and Cutler yourself. Start from bilinear and add the correction term
     for each of the eight cases in the lecture 7 table. Write it as fixed linear filters, with no
     branching and no per-pixel decisions, because that's the property that makes it cheap.
     '''
@@ -194,11 +196,38 @@ if __name__ == "__main__":
     for a in ax:
         a.axis("off")
     fig.colorbar(im, cax=cax, label="|error|, linear light (shared scale)")
-    fig.suptitle(f"Item 5: bilinear vs Malvar-He-Cutler, {crop_size}x{crop_size} crop at "
+    fig.suptitle(f"Item {problem:02d}: bilinear vs Malvar-He-Cutler, {crop_size}x{crop_size} crop at "
                  f"row {r}, col {c} (display balanced, numbers are not)")
-    fig.savefig(f"{output_path}05_mhc.png", bbox_inches="tight", dpi=150)
-    print(f"DELIVERABLE 05: MHC demosaic {mhc.shape}; measured sites preserved; "
-          f"figure {output_path}05_mhc.png")
+    fig.savefig(f"{output_path}{problem:02d}_mhc.png", bbox_inches="tight", dpi=150)
+    print(f"DELIVERABLE {problem:02d}: MHC demosaic {mhc.shape}; measured sites preserved; "
+          f"figure {output_path}{problem:02d}_mhc.png")
     if SHOW:
         plt.show()
     plt.close(fig)
+
+
+    # Problem 8
+    problem = 8
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    8. The eight cases need only four filter patterns between them, because two of them are
+    each other rotated by ninety degrees. Print the four you used.
+    '''
+    kernels = dm.mhc_full_kernels()
+    assert np.allclose(kernels["R/B at G, column"], np.rot90(kernels["R/B at G, row"]))
+    print("DELIVERABLE {problem:02d}: the four MHC filters, shown x 8 (divide by 8 to apply). "
+          "Center tap at [2, 2].")
+    for name, k in kernels.items():
+        print(f"\n{name}   (sum = {k.sum():.3f})")
+        print(np.array2string(8 * k, precision=1, suppress_small=True, floatmode="maxprec"))
+    print("\n'R/B at G, column' == np.rot90('R/B at G, row'): True")
+
+    # Same four filters as LaTeX, for pasting into the report.
+    latex_labels = {"G at R/B": r"K_{\text{G at R, B}}",
+                    "R/B at G, row": r"K_{\text{R, B at G, row}}",
+                    "R/B at G, column": r"K_{\text{R, B at G, col}}",
+                    "R at B / B at R": r"K_{\text{R at B, B at R}}"}
+    latex_file = f"{output_path}{problem:02d}_mhc_kernels.txt"
+    lf.generate_matrix_grid({latex_labels[n]: k for n, k in kernels.items()},
+                            scale=8, per_row=2, output_path=latex_file)
+    print(f"\tLaTeX for the report: {latex_file}")
