@@ -212,3 +212,25 @@ def test_mhc_clip_flag():
     raw = dm.mhc_demosaic(mos)
     assert raw.min() < 0 or raw.max() > 1          # random data overshoots
     np.testing.assert_array_equal(dm.mhc_demosaic(mos, clip=True), np.clip(raw, 0, 1))
+
+
+def test_measured_site_check_detects_a_change():
+    """The checker itself must catch a single altered site, or a PASS means nothing."""
+    rng = np.random.default_rng(13)
+    mos = dm.mosaic_reference(rng.random((8, 10, 3)))
+    out = dm.bilinear_demosaic(mos)
+    assert dm.measured_site_check(out, mos)["exact"]
+    out[0, 0, 0] += 1e-15                      # R site, top-left corner
+    res = dm.measured_site_check(out, mos)
+    assert res["changed"] == 1 and res["on_edge"] == 1 and not res["exact"]
+
+
+def test_latex_sci_and_table_alignment():
+    import my_library.latex_formatter as lf
+    assert lf.latex_sci(0) == "0"
+    assert lf.latex_sci(5.551e-17) == r"$5.55 \times 10^{-17}$"
+    t = lf.generate_table([["a"], ["1"]], ["x", "y"], VERBOSE=False, align="lr")
+    assert t.startswith(r"\begin{tabular}{l | r}")
+    # default unchanged
+    assert lf.generate_table([["a"], ["1"]], ["x", "y"], VERBOSE=False).startswith(
+        r"\begin{tabular}{l | l}")

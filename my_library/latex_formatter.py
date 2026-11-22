@@ -11,7 +11,7 @@ def latex_escape(value):
 
 
 def generate_table(lists_of_data, labels, caption=None, output_path=None,
-                   escape=False, longtable=False, VERBOSE=True):
+                   escape=False, longtable=False, VERBOSE=True, align=None):
     """
     Generate a LaTeX table from a dictionary of data.
 
@@ -24,6 +24,8 @@ def generate_table(lists_of_data, labels, caption=None, output_path=None,
         longtable (bool): emit a longtable (needs \\usepackage{longtable}) so a table
             longer than a page breaks across pages; the caption goes inside it.
         VERBOSE (bool): print the columns and every row while building.
+        align (str or list, optional): one of l/c/r per column, e.g. "llrrrrl".
+            Default (None) left-aligns every column, as before.
 
     Returns:
         str: A string containing the LaTeX code for the table.
@@ -38,7 +40,9 @@ def generate_table(lists_of_data, labels, caption=None, output_path=None,
 
     # Start building the LaTeX table
     env = "longtable" if longtable else "tabular"
-    latex_table = f"\\begin{{{env}}}{{" + " | ".join(["l"] * len(columns)) + "}\n"
+    spec = list(align) if align else ["l"] * len(columns)
+    assert len(spec) == len(columns), "align needs one letter per column"
+    latex_table = f"\\begin{{{env}}}{{" + " | ".join(spec) + "}\n"
     if longtable and caption:
         latex_table += f"\\caption{{{caption}}} \\\\\n"
     latex_table += " \\hline\n"
@@ -67,6 +71,18 @@ def generate_table(lists_of_data, labels, caption=None, output_path=None,
         with open(output_path, "w") as f:
             f.write(latex_table)
     return latex_table
+
+def latex_sci(x, digits=2):
+    """A number in LaTeX scientific notation, e.g. 5.55e-17 -> "$5.55 \\times 10^{-17}$".
+    Exact zero prints as "0". Text-mode safe: the math is wrapped in $...$."""
+    if x == 0:
+        return "0"
+    mantissa, exponent = f"{x:.{digits}e}".split("e")
+    exponent = int(exponent)
+    if exponent == 0:
+        return f"${mantissa}$"
+    return f"${mantissa} \\times 10^{{{exponent}}}$"
+
 
 def latex_number(x, max_denominator=16):
     """Format a number exactly for LaTeX: 4 -> "4", 0.5 -> "\\tfrac{1}{2}",

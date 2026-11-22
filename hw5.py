@@ -281,11 +281,12 @@ if __name__ == "__main__":
 
     mine_bil, professors_bil = dm.bilinear_demosaic(linear_rggb), mf.bilinear_demosaic(linear_rggb)
     mine_mhc, professors_mhc = dm.mhc_demosaic(linear_rggb), mf.mhc_demosaic(linear_rggb)
+    mine_mhc_clipped = dm.mhc_demosaic(linear_rggb, clip=True)   # reused in Problem 12
     # Professor's MHC clips to [0, 1] on return and mine does not, so clip mine to compare
     # like with like; the unclipped figure shows how much of the gap is just that.
     results = {"bilinear": dm.compare_demosaic(mine_bil, professors_bil),
-               "MHC (mine clipped to [0, 1])": dm.compare_demosaic(
-                   dm.mhc_demosaic(linear_rggb, clip=True), professors_mhc),
+               "MHC (mine clipped to [0, 1])": dm.compare_demosaic(mine_mhc_clipped,
+                                                                   professors_mhc),
                "MHC (mine unclipped)": dm.compare_demosaic(mine_mhc, professors_mhc)}
     print(f"DELIVERABLE {problem:02d}: largest |mine - McNames'| (linear light, full scale = 1)")
     print(f"\t{'method':30s} {'whole frame':>12s} {'at (row, col, ch)':>20s} "
@@ -296,3 +297,85 @@ if __name__ == "__main__":
     print("\t* interior excludes the 2-pixel frame. Inside it the methods differ only in the\n"
           "\t  border rule: mine falls back to bilinear there; professors uses cv2.BORDER_REFLECT,\n"
           "\t  which copies row 0 into row -1 and so breaks the Bayer phase for 5x5 kernels.")
+
+    # Same table as LaTeX for the report. Labels shortened to fit a 1-inch-margin page
+    # (the caption spells them out); numbers right-aligned.
+    short = {"MHC (mine clipped to [0, 1])": r"MHC, mine clipped to $[0, 1]$",
+             "MHC (mine unclipped)": "MHC, mine unclipped"}
+    names = list(results)
+    columns = [[short.get(n, n) for n in names],
+               [lf.latex_sci(results[n]["max_all"]) for n in names],
+               ["({}, {}, {})".format(*results[n]["where"]) for n in names],
+               ["border" if results[n]["in_border"] else "interior" for n in names],
+               [lf.latex_sci(results[n]["max_interior"]) for n in names]]
+    latex_file = f"{output_path}{problem:02d}_compare_to_reference.txt"
+    lf.generate_table(columns,
+                      ["Method", "Whole frame", "Where (row, col, ch)", "Region",
+                       "Interior"],
+                      caption="Largest absolute difference between my demosaicers and the "
+                              "Lecture 7 reference implementations (Prof.\\ McNames), on the "
+                              "aligned RGGB raw mosaic in linear light (full scale 1). Where: "
+                              "location of the whole-frame maximum; Region: whether it lies "
+                              "within 2 px of the edge. Interior: the 2-px frame excluded. The "
+                              "reference clips MHC to $[0, 1]$, so mine is shown both clipped "
+                              "and unclipped.",
+                      output_path=latex_file, VERBOSE=False, align="lrrlr")
+    print(f"\tLaTeX for the report: {latex_file}")
+
+
+    # Problem 12
+    problem = 12
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    12. Both reference implementations leave the measured sites exactly as they found them.
+    That's a property worth testing rather than trusting, and your own code should have it too.
+    '''
+    # Every output was computed in Problems 6, 7 and 10; nothing is recomputed here.
+    P3, P1 = "re-mosaicked reference (P3)", "aligned raw mosaic (P1)"
+    checks = [(P3, "bilinear (mine)", bilinear, mosaic),
+              (P3, "MHC (mine)", mhc, mosaic),
+              (P1, "bilinear (mine)", mine_bil, linear_rggb),
+              (P1, "MHC (mine)", mine_mhc, linear_rggb),
+              (P1, "MHC (mine, clip=True)", mine_mhc_clipped, linear_rggb),
+              (P1, "bilinear (McNames)", professors_bil, linear_rggb),
+              (P1, "MHC (McNames)", professors_mhc, linear_rggb)]
+    print(f"DELIVERABLE {problem:02d}: measured sites returned unchanged? (exact, bit for bit)")
+    print(f"\t{'input':29s} {'implementation':23s} {'sites':>11s} {'changed':>8s} "
+          f"{'on edge':>8s} {'max |diff|':>11s}  result")
+    rows = []
+    for input_name, impl, rgb, mos in checks:
+        res = dm.measured_site_check(rgb, mos)
+        verdict = "PASS" if res["exact"] else "within rounding" if res["max_abs"] < 1e-12 else "FAIL"
+        print(f"\t{input_name:29s} {impl:23s} {res['sites']:11,d} {res['changed']:8,d} "
+              f"{res['on_edge']:8,d} {res['max_abs']:11.2e}  {verdict}")
+        rows.append((input_name, impl, res, verdict))
+        if "mine" in impl:
+            assert res["exact"], f"{impl} changed measured sites on {input_name}"
+    print("\tMine restore each measured value explicitly (np.where), so they are bit-exact.\n"
+          "\tAny McNames changes sit on the outermost ring: cv2.BORDER_REFLECT duplicates the\n"
+          "\tedge pixel next to itself, so the normalized average there is (6v)/6 or (9v)/9,\n"
+          "\twhich can round off by one unit in the last place.")
+
+    # Same table as LaTeX for the report. Labels shortened to fit a 1-inch-margin page
+    # (the caption spells them out); numbers right-aligned.
+    short = {P3: "P3 reference", P1: "P1 raw mosaic", "within rounding": "rounding"}
+    tex = lambda t: short.get(t, t).replace("clip=True", r"\texttt{clip=True}")
+    columns = [[tex(r[0]) for r in rows],
+               [tex(r[1]) for r in rows],
+               [f"{r[2]['sites']:,}" for r in rows],
+               [f"{r[2]['changed']:,}" for r in rows],
+               [f"{r[2]['on_edge']:,}" for r in rows],
+               [lf.latex_sci(r[2]["max_abs"]) for r in rows],
+               [tex(r[3]) for r in rows]]
+    latex_file = f"{output_path}{problem:02d}_measured_sites.txt"
+    lf.generate_table(columns,
+                      ["Input", "Implementation", "Sites", "Changed", "On edge",
+                       r"max $|\Delta|$", "Result"],
+                      caption="Measured sites returned by each demosaicer, compared bit for bit "
+                              "with the mosaic it was given. P3 reference: the re-mosaicked "
+                              "quarter-resolution reference (Problem 3). P1 raw mosaic: the "
+                              "aligned RGGB raw mosaic in linear light (Problem 1). On edge: "
+                              "outermost row or column. Rounding: largest change is below "
+                              r"$10^{-12}$ (one unit in the last place).",
+                      output_path=latex_file, VERBOSE=False, align="llrrrrl")
+    print(f"\tLaTeX for the report: {latex_file}")

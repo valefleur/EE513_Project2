@@ -502,3 +502,42 @@ def compare_demosaic(mine, theirs, border=2):
             "where": tuple(int(i) for i in where),
             "in_border": in_border,
             "max_interior": float(d[border:h - border, border:w - border].max())}
+
+
+def measured_site_check(rgb, mosaic, edge=1):
+    """How much a demosaicer changed the values it was given (it should change none).
+
+    At every site, the color the sensor measured there is already known, so a
+    demosaicer should fill in only the two missing colors and hand the measured
+    one back untouched. This compares output[site, measured color] with the
+    mosaic value, bit for bit.
+
+    Parameters
+    ----------
+    rgb : float array (H, W, 3), demosaiced output.
+    mosaic : float array (H, W), the RGGB mosaic that was demosaiced.
+    edge : int, width of the outer frame reported separately (1 = outermost ring),
+        because border handling is where implementations differ.
+
+    Returns
+    -------
+    dict with
+        "sites"      : number of measured sites checked (H * W)
+        "changed"    : how many came back different (exact comparison)
+        "on_edge"    : how many of those lie within ``edge`` of the frame
+        "max_abs"    : largest |output - mosaic| over measured sites
+        "exact"      : True if every measured site is bit-identical
+    """
+    rgb = np.asarray(rgb, float)
+    mosaic = np.asarray(mosaic, float)
+    masks = rggb_masks(mosaic.shape)
+    measured = np.take_along_axis(rgb, np.argmax(masks, axis=-1)[..., None], axis=-1)[..., 0]
+    changed = measured != mosaic
+    h, w = mosaic.shape
+    ring = np.ones((h, w), bool)
+    ring[edge:h - edge, edge:w - edge] = False
+    return {"sites": int(mosaic.size),
+            "changed": int(changed.sum()),
+            "on_edge": int((changed & ring).sum()),
+            "max_abs": float(np.abs(measured - mosaic).max()),
+            "exact": not changed.any()}
