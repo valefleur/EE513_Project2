@@ -161,3 +161,44 @@ if __name__ == "__main__":
     if SHOW:
         plt.show()
     plt.close(fig)
+
+
+    # Problem 5
+    problem = 5
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    5. Implement Malvar, He and Cutler yourself. Start from bilinear and add the correction term
+    for each of the eight cases in the lecture 7 table. Write it as fixed linear filters, with no
+    branching and no per-pixel decisions, because that's the property that makes it cheap.
+    '''
+    mhc = dm.mhc_demosaic(mosaic)
+    dm.assert_round_trip(mhc, mosaic)            # measured sites must survive untouched
+    print(f"\tMHC range {mhc.min():.4f} to {mhc.max():.4f} (outside [0, 1] = overshoot "
+          f"from the negative taps; clipped only for display)")
+
+    # Same crop as item 4. Shared error scale so the two error maps compare by eye.
+    err_b = np.abs(bilinear - reference)[sl].mean(axis=2)
+    err_m = np.abs(mhc - reference)[sl].mean(axis=2)
+    vmax = np.percentile(np.concatenate([err_b.ravel(), err_m.ravel()]), 99)
+    fig = plt.figure(figsize=(17, 4.6))
+    gs = fig.add_gridspec(1, 6, width_ratios=[1, 1, 1, 1, 1, 0.05], wspace=0.08)
+    ax = [fig.add_subplot(gs[0, i]) for i in range(5)]
+    cax = fig.add_subplot(gs[0, 5])
+    for a, (title, img) in zip(ax[:3], [("Reference (truth)", reference),
+                                        ("Bilinear", bilinear), ("MHC", mhc)]):
+        a.imshow(dm.display_rgb(img, balance=True)[sl], interpolation="nearest")
+        a.set_title(title)
+    for a, (title, e) in zip(ax[3:], [("|error| bilinear", err_b), ("|error| MHC", err_m)]):
+        im = a.imshow(e, cmap="magma", vmin=0, vmax=vmax, interpolation="nearest")
+        a.set_title(title)
+    for a in ax:
+        a.axis("off")
+    fig.colorbar(im, cax=cax, label="|error|, linear light (shared scale)")
+    fig.suptitle(f"Item 5: bilinear vs Malvar-He-Cutler, {crop_size}x{crop_size} crop at "
+                 f"row {r}, col {c} (display balanced, numbers are not)")
+    fig.savefig(f"{output_path}05_mhc.png", bbox_inches="tight", dpi=150)
+    print(f"DELIVERABLE 05: MHC demosaic {mhc.shape}; measured sites preserved; "
+          f"figure {output_path}05_mhc.png")
+    if SHOW:
+        plt.show()
+    plt.close(fig)

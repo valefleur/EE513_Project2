@@ -12,6 +12,7 @@ Lecture 7 demo notebook, 07_build_an_isp.ipynb (setup cell and section 2).
 Written with help from Claude (Anthropic).
 """
 import numpy as np
+from scipy.ndimage import correlate
 
 import psu_imaging as psu
 import my_library.linear_light as ll
@@ -185,7 +186,6 @@ def display_rgb(linear_rgb, balance=False):
     return psu.linear_to_srgb(np.clip(x, 0, 1))
 
 
-from scipy.ndimage import correlate
 
 # Red and blue live on a square lattice (every other row AND column): the 2-D
 # triangle (tent) filter, the outer product of the 1-D linear interpolator [1, 2, 1]/2.
@@ -290,3 +290,137 @@ def busiest_crop(rgb, size=96):
     tiles = grad[:h, :w].reshape(h // size, size, w // size, size).mean(axis=(1, 3))
     i, j = np.unravel_index(np.argmax(tiles), tiles.shape)
     return i * size, j * size
+
+# ---------------------------------------------------------------------------
+# Item 5: Malvar-He-Cutler (MHC) gradient-corrected linear demosaicing
+#   H. S. Malvar, L.-W. He, R. Cutler, "High-quality linear interpolation for
+#   demosaicing of Bayer-patterned color images," Proc. IEEE ICASSP, 2004.
+# ---------------------------------------------------------------------------
+# Every MHC kernel is   (bilinear kernel)  +  gain * (correction kernel).
+# The correction kernels read ONLY the channel measured at the center pixel
+# (all their taps land on same-color sites), so each one is a high-pass
+# "how much does this pixel stand out from its same-color neighbors" detector.
+# Each sums to zero: on flat regions the correction vanishes.
+
+# Measured channel is R or B, spacing 2: center minus mean of the 4 at distance 2.
+LAP_RB = np.array([[0,     0, -1/4, 0,     0],
+                   [0,     0,  0,   0,     0],
+                   [-1/4,  0,  1,   0, -1/4],
+                   [0,     0,  0,   0,     0],
+                   [0,     0, -1/4, 0,     0]])
+# Measured channel is G, and the missing color's neighbors are LEFT/RIGHT.
+# Green sits on a checkerboard, so its nearest same-color neighbors are the
+# diagonals; the shape (weaker, positive vertical taps) is from the paper.
+LAP_G_ROW = np.array([[0,    0,   1/10, 0,    0],
+                      [0,   -1/5, 0,   -1/5,  0],
+                      [-1/5, 0,   1,    0,   -1/5],
+                      [0,   -1/5, 0,   -1/5,  0],
+                      [0,    0,   1/10, 0,    0]])
+LAP_G_COL = LAP_G_ROW.T          # same, when the missing color's neighbors are UP/DOWN
+
+MHC_ALPHA = 1 / 2   # G at an R or B site
+MHC_BETA  = 5 / 8   # R or B at a G site
+MHC_GAMMA = 3 / 4   # R at a B site, B at an R site
+
+
+def rggb_site_masks(shape):
+    """Boolean masks of the four RGGB site types (G1 and G2 kept separate).
+
+    G1 is green on a red row (red neighbors left/right, blue up/down);
+    G2 is green on a blue row (blue neighbors left/right, red up/down).
+    MHC needs the distinction; bilinear does not.
+
+    Returns
+    -------
+    dict str -> bool array (H, W), keys "R", "G1", "G2", "B".
+    """
+    keys = {"R": (0, 0), "G1": (0, 1), "G2": (1, 0), "B": (1, 1)}
+    out = {}
+    for k, (r, c) in keys.items():
+        m = np.zeros(shape, dtype=bool)
+        m[r::2, c::2] = True
+        out[k] = m
+    return out
+
+
+def mhc_correction_planes(mosaic, border=2):
+    """The three gain-scaled correction images MHC adds on top of bilinear.
+
+    Each is a convolution of the WHOLE mosaic with one correction kernel. It
+    is only meaningful at the sites where it gets used (where every tap lands
+    on the center's own color), and the caller selects those sites with fixed
+    masks, so nothing here depends on the data.
+
+    The 5x5 kernels need 2 pixels of context. Within ``border`` pixels of the
+    frame edge the correction is set to 0, i.e. MHC falls back to the
+    border-safe bilinear there, rather than inventing pixels outside the frame.
+
+    Parameters
+    ----------
+    mosaic : float array (H, W), RGGB.
+    border : int, width of the bilinear-only frame (2 for 5x5 kernels).
+
+    Returns
+    -------
+    dict with "rb" (alpha * LAP_RB), "row" (beta * LAP_G_ROW),
+    "col" (beta * LAP_G_COL), "diag" (gamma * LAP_RB), each float (H, W).
+    """
+    planes = {
+        "rb":   MHC_ALPHA * correlate(mosaic, LAP_RB, mode="constant"),
+        "row":  MHC_BETA * correlate(mosaic, LAP_G_ROW, mode="constant"),
+        "col":  MHC_BETA * correlate(mosaic, LAP_G_COL, mode="constant"),
+        "diag": MHC_GAMMA * correlate(mosaic, LAP_RB, mode="constant"),
+    }
+    if border:
+        inner = np.zeros(mosaic.shape, dtype=bool)
+        inner[border:-border, border:-border] = True
+        for k in planes:
+            planes[k] = np.where(inner, planes[k], 0.0)
+    return planes
+
+
+def mhc_demosaic(mosaic, border=2):
+    """Malvar-He-Cutler demosaic: bilinear plus a scaled Laplacian of the measured channel.
+
+    Idea: within a few pixels, the DIFFERENCE between color channels (e.g. R - G)
+    changes slowly, while each channel's fine detail is shared, since edges and
+    texture are mostly brightness. So the amount by which the measured channel
+    stands out from its own neighbors (its Laplacian, a high-pass) is a good
+    guess for how much the missing channel stands out too:
+
+        est_missing = bilinear_missing + gain * Laplacian(measured channel)
+
+    The eight cases (missing color, at which site) -> correction used:
+        G at R  : alpha * LAP_RB          G at B  : alpha * LAP_RB
+        R at G1 : beta  * LAP_G_ROW       R at G2 : beta  * LAP_G_COL
+        B at G2 : beta  * LAP_G_ROW       B at G1 : beta  * LAP_G_COL
+        R at B  : gamma * LAP_RB          B at R  : gamma * LAP_RB
+    with alpha = 1/2, beta = 5/8, gamma = 3/4 (fitted by the authors on the
+    Kodak image set, then rounded to multiples of 1/8 for cheap hardware).
+
+    Implementation: 3 bilinear convolutions + 4 correction convolutions, then
+    a fixed selection by site type. No branching on pixel values, which is why
+    it costs no more than one fixed linear filter per output channel.
+
+    Parameters
+    ----------
+    mosaic : float array (H, W), RGGB, linear light.
+    border : int, frame width that falls back to bilinear (see mhc_correction_planes).
+
+    Returns
+    -------
+    float array (H, W, 3), R, G, B. NOT clipped: the negative taps can push a
+    value slightly outside [0, 1] near strong edges (overshoot). Clip before display.
+    """
+    mosaic = np.asarray(mosaic, dtype=float)
+    base = bilinear_demosaic(mosaic)
+    s = rggb_site_masks(mosaic.shape)
+    c = mhc_correction_planes(mosaic, border)
+
+    zero = np.zeros(mosaic.shape)
+    r_corr = np.where(s["G1"], c["row"], zero) + np.where(s["G2"], c["col"], zero) \
+        + np.where(s["B"], c["diag"], zero)
+    g_corr = np.where(s["R"] | s["B"], c["rb"], zero)
+    b_corr = np.where(s["G2"], c["row"], zero) + np.where(s["G1"], c["col"], zero) \
+        + np.where(s["R"], c["diag"], zero)
+    return base + np.stack([r_corr, g_corr, b_corr], axis=-1)

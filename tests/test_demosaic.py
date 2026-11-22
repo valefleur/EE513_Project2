@@ -75,3 +75,78 @@ def test_linear_ramp_exact_in_interior():
 def test_cfa_offset_table():
     for pat, off in [("RGGB", (0, 0)), ("GRBG", (0, 1)), ("GBRG", (1, 0)), ("BGGR", (1, 1))]:
         assert dm.rggb_offset(pat) == off
+
+
+# ---------------------------- MHC ----------------------------
+from scipy.ndimage import correlate
+
+# The eight full kernels as printed in Malvar, He & Cutler (2004), x 1/8.
+_G_AT_RB = np.array([[0, 0, -1, 0, 0], [0, 0, 2, 0, 0], [-1, 2, 4, 2, -1],
+                     [0, 0, 2, 0, 0], [0, 0, -1, 0, 0]]) / 8
+_ROW = np.array([[0, 0, .5, 0, 0], [0, -1, 0, -1, 0], [-1, 4, 5, 4, -1],
+                 [0, -1, 0, -1, 0], [0, 0, .5, 0, 0]]) / 8
+_DIAG = np.array([[0, 0, -1.5, 0, 0], [0, 2, 0, 2, 0], [-1.5, 0, 6, 0, -1.5],
+                  [0, 2, 0, 2, 0], [0, 0, -1.5, 0, 0]]) / 8
+
+
+def mhc_from_paper(mosaic):
+    """Independent MHC: apply the paper's full kernels directly (no bilinear split)."""
+    s = dm.rggb_site_masks(mosaic.shape)
+    f = lambda k: correlate(mosaic, k, mode="constant")
+    g, row, col, diag = f(_G_AT_RB), f(_ROW), f(_ROW.T), f(_DIAG)
+    R = np.select([s["R"], s["G1"], s["G2"], s["B"]], [mosaic, row, col, diag])
+    G = np.select([s["G1"] | s["G2"], s["R"] | s["B"]], [mosaic, g])
+    B = np.select([s["B"], s["G2"], s["G1"], s["R"]], [mosaic, row, col, diag])
+    return np.stack([R, G, B], axis=-1)
+
+
+def test_mhc_matches_paper_kernels_in_interior():
+    rng = np.random.default_rng(3)
+    mos = dm.mosaic_reference(rng.random((30, 34, 3)))
+    np.testing.assert_allclose(dm.mhc_demosaic(mos)[2:-2, 2:-2],
+                               mhc_from_paper(mos)[2:-2, 2:-2], atol=1e-12)
+
+
+def test_mhc_border_falls_back_to_bilinear():
+    rng = np.random.default_rng(4)
+    mos = dm.mosaic_reference(rng.random((16, 18, 3)))
+    edge = np.ones(mos.shape, bool); edge[2:-2, 2:-2] = False
+    np.testing.assert_array_equal(dm.mhc_demosaic(mos)[edge], dm.bilinear_demosaic(mos)[edge])
+
+
+@pytest.mark.parametrize("shape", [(10, 14), (7, 9)])
+def test_mhc_constant_image_exact(shape):
+    ref = np.ones((*shape, 3)) * np.array([0.2, 0.5, 0.8])
+    np.testing.assert_allclose(dm.mhc_demosaic(dm.mosaic_reference(ref)), ref, atol=1e-14)
+
+
+def test_mhc_measured_sites_untouched():
+    rng = np.random.default_rng(5)
+    mos = dm.mosaic_reference(rng.random((12, 16, 3)))
+    dm.assert_round_trip(dm.mhc_demosaic(mos), mos)
+
+
+def _shared_detail_errors(channel_gains):
+    y, x = np.mgrid[0:64, 0:64].astype(float)
+    gray = 0.5 + 0.4 * np.sin(x * y / 400.0)
+    ref = gray[..., None] * np.asarray(channel_gains, dtype=float)
+    mos = dm.mosaic_reference(ref)
+    err = lambda out: np.mean((out[2:-2, 2:-2] - ref[2:-2, 2:-2]) ** 2)
+    return err(dm.bilinear_demosaic(mos)), err(dm.mhc_demosaic(mos))
+
+
+def test_mhc_beats_bilinear_on_shared_detail():
+    """Gray texture, channels equal (as after white balance): the case MHC is built for.
+    Measured: MHC error is about 0.34x bilinear's."""
+    bil, mhc = _shared_detail_errors([1.0, 1.0, 1.0])
+    assert mhc < 0.5 * bil
+
+
+def test_mhc_gain_shrinks_without_white_balance():
+    """Same texture with unequal channel gains (no white balance): MHC still wins, by less
+    (about 0.64x), because the Laplacian it borrows has the wrong amplitude. This is one
+    reason white balance goes before demosaicing."""
+    bil_wb, mhc_wb = _shared_detail_errors([1.0, 1.0, 1.0])
+    bil, mhc = _shared_detail_errors([0.6, 1.0, 0.7])
+    assert mhc < bil
+    assert mhc / bil > mhc_wb / bil_wb
