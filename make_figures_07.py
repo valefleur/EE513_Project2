@@ -1,4 +1,5 @@
 """
+Written by Professor James McNames.
 Figures for EE 513 lecture 7: The image signal processor.
 
 Includes bilinear and Malvar-He-Cutler demosaicing written out, since implementing
