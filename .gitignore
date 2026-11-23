@@ -5,6 +5,9 @@
 images
 output
 
+# Mac OS X
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -225,3 +228,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Created on import by make_figures_07.py (Prof. McNames)
+Figures/
