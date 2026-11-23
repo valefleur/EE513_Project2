@@ -347,3 +347,52 @@ def test_find_straight_edges_polarity_separates_edge_from_stripe():
     assert st["orientation"] == "vertical"          # still found, still classified
     assert all(c["single_edge"] for c in dm.find_straight_edges(stripe, size=48,
                                                                 single_edge=True))
+
+
+def test_find_mhc_worse_finds_planted_regions_without_overlap():
+    """Plant two places where 'MHC' is worse; both are found, worst first, not overlapping."""
+    rng = np.random.default_rng(19)
+    ref = 0.5 + 0.01 * rng.random((300, 300, 3))
+    # Constructed stand-ins for demosaiced outputs (not errors, not real demosaicing):
+    # find_mhc_worse() subtracts the reference itself.
+    fake_bilinear_out = ref + 0.001
+    fake_mhc_out = ref + 0.001
+    fake_mhc_out[40:80, 50:90] += 0.05          # big absolute loss
+    fake_mhc_out[200:240, 200:240] += 0.02      # smaller loss
+    found = dm.find_mhc_worse(ref, fake_bilinear_out, fake_mhc_out, size=48, top=3)
+    assert len(found) == 2                       # nowhere else is MHC worse
+    (a, b) = found
+    assert a["loss_db"] > b["loss_db"] > 0
+    assert a["row"] <= 40 + 20 <= a["row"] + 48 and a["col"] <= 50 + 20 <= a["col"] + 48
+    assert b["row"] <= 220 <= b["row"] + 48 and b["col"] <= 220 <= b["col"] + 48
+    assert abs(a["row"] - b["row"]) >= 48 or abs(a["col"] - b["col"]) >= 48
+
+
+def test_describe_window_hints():
+    ref = np.full((200, 200, 3), 0.4)
+    ref[:, 100:] = [0.05, 0.2, 0.6]                      # blue region: colored edge at col 100
+    ref[150:, :40] = 0.01                                # dark flat corner
+    ref[10:30, 160:180] = 1.0                            # clipped patch
+    assert dm.describe_window(ref, 60, 76, 48)["hint"] == "colored edge"
+    assert dm.describe_window(ref, 155, 2, 30)["hint"] == "dark and flat (noise)"
+    assert dm.describe_window(ref, 0, 150, 40)["hint"] == "near clipping"
+
+
+def test_find_mhc_worse_max_per_hint_gives_variety():
+    """A long colored edge supplies all the worst windows; max_per_hint=1 also finds the
+    dark flat region where MHC is (less) worse."""
+    rng = np.random.default_rng(20)
+    ref = np.full((300, 400, 3), 0.4)
+    ref[:, 200:] = [0.05, 0.2, 0.6]                      # long colored edge at col 200
+    ref[200:, :120] = 0.01                               # dark flat region
+    ref += 0.002 * rng.random(ref.shape)
+    # Constructed stand-ins for demosaiced outputs (not errors, not real demosaicing):
+    # find_mhc_worse() subtracts the reference itself.
+    fake_bilinear_out = ref + 0.001
+    fake_mhc_out = fake_bilinear_out.copy()
+    fake_mhc_out[:, 195:205] += 0.05                              # big loss along the whole edge
+    fake_mhc_out[200:, :120] += 0.004                             # small loss in the dark region
+    free = dm.find_mhc_worse(ref, fake_bilinear_out, fake_mhc_out, size=48, top=3)
+    assert all(f["hint"] == "colored edge" for f in free)
+    varied = dm.find_mhc_worse(ref, fake_bilinear_out, fake_mhc_out, size=48, top=3, max_per_hint=1)
+    assert {f["hint"] for f in varied} >= {"colored edge", "dark and flat (noise)"}

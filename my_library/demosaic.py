@@ -841,3 +841,172 @@ def restore_single_frame_noise(quiet_reference, model, rng):
     var_ref = np.maximum(model["a"] * q + model["b"], 0.0)
     var_ref[..., 1] /= 2                      # G in the reference is a mean of two pixels
     return q + rng.normal(0.0, 1.0, q.shape) * np.sqrt(0.75 * var_ref)
+
+
+# ---------------------------------------------------------------------------
+# Item 18: where the gradient correction does not help
+# ---------------------------------------------------------------------------
+
+def find_mhc_worse(reference, bilinear, mhc, size=48, top=4, rank_by="difference",
+                   margin=4, max_per_hint=None):
+    """Windows where MHC's error is larger than bilinear's, worst first, non-overlapping.
+
+    Per window (stride size/2), with squared error averaged over pixels and R, G, B:
+
+        mse_b, mse_m = mean (bilinear - ref)^2, mean (MHC - ref)^2
+        "difference": rank by  mse_m - mse_b         (largest absolute loss; favors
+                                                      bright, high-contrast places)
+        "ratio":      rank by  10 log10(mse_m / mse_b) dB  (largest relative loss;
+                                                      also finds dark, flat, noisy
+                                                      places where both errors are small)
+
+    Only windows where MHC is worse are kept. Picks are greedy and do not overlap,
+    so the list covers different places rather than one spot shifted by a few pixels.
+    Each pick is re-centered on where MHC's excess error concentrates. A long edge
+    can supply every one of the worst places; ``max_per_hint`` caps how many picks
+    share one heuristic hint, so the list also covers different KINDS of failure.
+
+    Each result also carries descriptors of the reference in that window, to help
+    name which MHC assumption broke (see describe_window()).
+
+    Parameters
+    ----------
+    reference, bilinear, mhc : float arrays (H, W, 3), linear light.
+    size : int, window and crop side.
+    top : int, how many places to return.
+    rank_by : "difference" or "ratio".
+    margin : int, frame width excluded (border rules, not the algorithms, differ there).
+    max_per_hint : int or None, most picks allowed per hint (None = no limit).
+
+    Returns
+    -------
+    list of dicts, worst first: "row", "col" (crop top-left, kept inside the frame),
+    "mse_bilinear", "mse_mhc", "loss_db" (10 log10 mse_m / mse_b, > 0 = MHC worse),
+    plus everything from describe_window().
+    """
+    if rank_by not in ("difference", "ratio"):
+        raise ValueError("rank_by must be 'difference' or 'ratio'")
+    ref = np.asarray(reference, float)
+    eb = ((np.asarray(bilinear, float) - ref) ** 2).mean(axis=2)
+    em = ((np.asarray(mhc, float) - ref) ** 2).mean(axis=2)
+    h, w = eb.shape
+    step = size // 2
+    cands = []
+    for r in range(margin, h - margin - size + 1, step):
+        for c in range(margin, w - margin - size + 1, step):
+            sl = (slice(r, r + size), slice(c, c + size))
+            mb, mm = eb[sl].mean(), em[sl].mean()
+            if mm <= mb or mb == 0:
+                continue
+            score = mm - mb if rank_by == "difference" else np.log10(mm / mb)
+            cands.append((score, r, c, mb, mm))
+    cands.sort(reverse=True)
+
+    picked, taken = [], []
+    stats = image_stats(ref)
+    per_hint = {}
+    for score, r, c, mb, mm in cands:
+        # Re-center on the excess error so the crop shows the problem, not a window corner.
+        sl = (slice(r, r + size), slice(c, c + size))
+        excess = np.clip(em[sl] - eb[sl], 0, None)
+        rr, cc = np.mgrid[r:r + size, c:c + size]
+        cr = (rr * excess).sum() / excess.sum()
+        ccol = (cc * excess).sum() / excess.sum()
+        row = int(np.clip(round(cr) - size // 2, 0, h - size))
+        col = int(np.clip(round(ccol) - size // 2, 0, w - size))
+        # Skip crops that overlap one already picked (compare the crops actually shown).
+        if any(abs(row - pr) < size and abs(col - pc) < size for pr, pc in taken):
+            continue
+        desc = describe_window(ref, row, col, size, stats)
+        if max_per_hint is not None and per_hint.get(desc["hint"], 0) >= max_per_hint:
+            continue
+        per_hint[desc["hint"]] = per_hint.get(desc["hint"], 0) + 1
+        taken.append((row, col))
+        info = {"row": row, "col": col, "mse_bilinear": float(mb), "mse_mhc": float(mm),
+                "loss_db": float(10 * np.log10(mm / mb))}
+        info.update(desc)
+        picked.append(info)
+        if len(picked) == top:
+            break
+    return picked
+
+
+def image_stats(reference):
+    """Whole-image quantities describe_window() compares each window against.
+
+    Computed once per image so that describing many windows stays cheap.
+
+    Returns
+    -------
+    dict: "gx", "gy" (green gradients), "gains" (gray-world, G = 1),
+    "flat_threshold" (75th percentile of squared gradient: at or below = flat),
+    "dark_threshold" (25th percentile of green: below = dark), "shape".
+    """
+    ref = np.asarray(reference, float)
+    gy, gx = np.gradient(ref[..., 1])
+    means = ref.reshape(-1, 3).mean(axis=0)
+    return {"gx": gx, "gy": gy, "gains": means[1] / means,
+            "flat_threshold": float(np.percentile(gx ** 2 + gy ** 2, 75)),
+            "dark_threshold": float(np.percentile(ref[..., 1], 25)),
+            "shape": ref.shape[:2]}
+
+
+def describe_window(reference, row, col, size, stats=None):
+    """Simple descriptors of a reference window, and a HEURISTIC guess at what it is.
+
+    Descriptors (reference in linear light, camera RGB):
+        level     : mean green, 0 = black, 1 = saturation
+        peak      : largest value of any channel (near 1 = clipping)
+        chroma    : 90th percentile over pixels of (max - min) / max of the
+                    gray-world-balanced RGB; 0 = neutral gray, 1 = fully saturated color
+        strength  : mean squared green gradient (how much edge or texture)
+        coherence : structure-tensor coherence (1 = parallel edges, 0 = texture/noise)
+        radius    : distance of the window center from the frame center,
+                    as a fraction of the half-diagonal (1 = a corner)
+
+    The "hint" applies fixed thresholds to these, in this order: near clipping,
+    dark and flat, colored edge, edge near a corner, fine texture, edge or line.
+    It is a starting point for looking, not a diagnosis.
+
+    Parameters
+    ----------
+    reference : float array (H, W, 3), linear light.
+    row, col, size : the window.
+    stats : dict from image_stats(reference); computed here if not given.
+
+    Returns
+    -------
+    dict with the descriptors above and "hint".
+    """
+    ref = np.asarray(reference, float)
+    if stats is None:
+        stats = image_stats(ref)
+    gx, gy = stats["gx"], stats["gy"]
+    sl = (slice(row, row + size), slice(col, col + size))
+    win = ref[sl]
+    balanced = np.maximum(win * stats["gains"], 1e-6)   # floor: black gives chroma 0, not 0/0
+    chroma = np.percentile((balanced.max(axis=2) - balanced.min(axis=2))
+                           / balanced.max(axis=2), 90)
+    sxx, syy, sxy = (gx[sl] ** 2).sum(), (gy[sl] ** 2).sum(), (gx[sl] * gy[sl]).sum()
+    strength = (sxx + syy) / win[..., 0].size
+    coherence = np.hypot(sxx - syy, 2 * sxy) / max(sxx + syy, 1e-30)
+    h, w = stats["shape"]
+    radius = np.hypot(row + size / 2 - h / 2, col + size / 2 - w / 2) / np.hypot(h / 2, w / 2)
+    level, peak = float(win[..., 1].mean()), float(win.max())
+    # Thresholds relative to the whole image where possible.
+    flat = strength <= stats["flat_threshold"]
+    if peak >= 0.98:
+        hint = "near clipping"
+    elif level < stats["dark_threshold"] and flat:
+        hint = "dark and flat (noise)"
+    elif chroma > 0.4 and not flat:
+        hint = "colored edge"
+    elif radius > 0.75 and not flat:
+        hint = "edge near a corner (lateral CA?)"
+    elif coherence < 0.5 and not flat:
+        hint = "fine texture"
+    else:
+        hint = "edge or line"
+    return {"level": level, "peak": peak, "chroma": float(chroma),
+            "strength": float(strength), "coherence": float(coherence),
+            "radius": float(radius), "hint": hint}

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 import psu_imaging as psu
 import my_library.demosaic as dm
+import my_library.crop_figures as cf
 import my_library.linear_light as ll
 import my_library.latex_formatter as lf
 # Reference demosaicers from the Lecture 7 slides, by Professor James McNames (Canvas,
@@ -14,7 +15,7 @@ import my_library.latex_formatter as lf
 import make_figures_07 as mf
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
 
-SHOW = True
+SHOW = False
 
 # A raw file with fine, high-contrast detail (checkerboard from HW2,
 # slanted edge, brick, text, foliage). The same file is used for every item.
@@ -647,60 +648,88 @@ if __name__ == "__main__":
     # Crop centered on the edge, kept inside the frame.
     er = int(np.clip(center[0] - EDGE_SIZE // 2, 0, reference.shape[0] - EDGE_SIZE))
     ec = int(np.clip(center[1] - EDGE_SIZE // 2, 0, reference.shape[1] - EDGE_SIZE))
-    esl = (slice(er, er + EDGE_SIZE), slice(ec, ec + EDGE_SIZE))
 
-    # One display balance for every panel (as in Problem 9); errors in linear light.
-    display_gains = reference.reshape(-1, 3).mean(axis=0)
-    display_gains = display_gains[1] / display_gains
-    show = lambda img: dm.display_rgb(img[esl] * display_gains)
-    err_bil = np.abs(bilinear - reference)[esl].mean(axis=2)
-    err_mhc = np.abs(mhc - reference)[esl].mean(axis=2)
-    vmax = np.percentile(np.concatenate([err_bil.ravel(), err_mhc.ravel()]), 99.5)
-    err_norm = plt.Normalize(vmin=0, vmax=vmax)
-    err_rgb = lambda e: plt.get_cmap("magma")(err_norm(e))[..., :3]
-
-    # Magnify by an exact integer and place each panel with fig.figimage at native size, so
-    # every image pixel is a ZOOM x ZOOM block of figure pixels: no display resampling.
-    ZOOM, DPI = 8, 100
-    P = EDGE_SIZE * ZOOM                               # panel side, figure pixels
-    GAP, VGAP, LEFT, TOP, TITLE, CBAR, BOTTOM = 30, 24, 20, 80, 28, 130, 20
-    W = LEFT + 3 * P + 2 * GAP + CBAR
-    H = TOP + 2 * (TITLE + P) + VGAP + BOTTOM
-    fig = plt.figure(figsize=(W / DPI, H / DPI), dpi=DPI)
-    panel_y = [H - TOP - TITLE - P, BOTTOM]           # bottom edges of the two rows
-    panel_x = [LEFT + k * (P + GAP) for k in range(3)]
-    title_at = lambda x, y, text: fig.text((x + P / 2) / W, (y + P + 6) / H, text,
-                                           ha="center", va="bottom", fontsize=11)
-    for x, (title, img) in zip(panel_x, [("Reference (truth)", reference),
-                                         ("Bilinear", bilinear), ("Malvar-He-Cutler", mhc)]):
-        fig.figimage(dm.magnify(show(img), ZOOM), xo=x, yo=panel_y[0], origin="upper")
-        title_at(x, panel_y[0], title)
-    for x, (title, e) in zip(panel_x[1:], [("|error| bilinear", err_bil),
-                                           ("|error| MHC", err_mhc)]):
-        fig.figimage(dm.magnify(err_rgb(e), ZOOM), xo=x, yo=panel_y[1], origin="upper")
-        title_at(x, panel_y[1], f"{title}, mean {e.mean():.2e}")
-    # Bottom left: where the crop is (ordinary axes; the thumbnail may be resampled).
-    thumb = fig.add_axes([panel_x[0] / W, panel_y[1] / H, P / W, P / H])
-    thumb.imshow(dm.display_rgb(reference * display_gains))
-    thumb.add_patch(plt.Rectangle((ec, er), EDGE_SIZE, EDGE_SIZE, fill=False,
-                                  edgecolor="red", linewidth=1.5))
-    thumb.axis("off")
-    title_at(panel_x[0], panel_y[1], "Crop location (red box)")
-    cax = fig.add_axes([(panel_x[2] + P + 15) / W, panel_y[1] / H, 15 / W, P / H])
-    fig.colorbar(plt.cm.ScalarMappable(norm=err_norm, cmap="magma"), cax=cax,
-                 label="|error|, linear light (shared scale)")
-    fig.suptitle(f"Item {problem:02d}: {edge_note}, {EDGE_SIZE}x{EDGE_SIZE} crop at row {er}, "
-                 f"col {ec}, each pixel shown as a {ZOOM}x{ZOOM} block\n"
-                 f"same display balance on all panels; errors are mean |error| over R, G, B",
-                 y=1 - 12 / H, va="top")
-    # Same dpi and no tight bbox (make_figures_07 sets savefig.bbox="tight" globally), so the
-    # canvas is saved exactly as laid out and the panels are not shifted or rescaled.
-    with plt.rc_context({"savefig.bbox": "standard"}):
-        fig.savefig(f"{output_path}{problem:02d}_edge_crops.png", dpi=DPI)
-    if SHOW:
-        plt.show()
-    plt.close(fig)
+    edge_crop = cf.plot_crop_comparison(reference, bilinear, mhc, er, ec, EDGE_SIZE,
+                                        f"{output_path}{problem:02d}_edge_crops.png",
+                                        f"Item {problem:02d}: {edge_note}", show=SHOW)
     print(f"DELIVERABLE {problem:02d}: {edge_note} at row {er}, col {ec}; mean |error| in crop: "
-          f"bilinear {err_bil.mean():.3e}, MHC {err_mhc.mean():.3e}; "
+          f"bilinear {edge_crop['mae_bilinear']:.3e}, MHC {edge_crop['mae_mhc']:.3e}; "
           f"figure {output_path}{problem:02d}_edge_crops.png")
+
+
+    # Problem 18
+    problem = 18
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    '''
+    18. Find somewhere the gradient correction doesn't help, or makes things worse, and show it
+    the same way. There's always somewhere.
+    '''
+    N_WORST = 4                          # how many of the worst places to plot, per ranking
+    MAX_PER_KIND = 1                     # at most this many per hint (None = worst N, any kind)
+    RANK_BY = ("difference", "ratio")    # "difference": largest absolute loss (bright, contrasty);
+                                         # "ratio": largest loss in dB (also dark, flat, noisy)
+    WORSE_CENTERS = [(550, 1380), (500, 1515), (450, 1480)]                   # extra (row, col) points to plot, e.g. on the blue tape
+    WORSE_SIZE = EDGE_SIZE
+
+    spots = []                           # (label, info) for every figure made
+    for rank_by in RANK_BY:
+        found = dm.find_mhc_worse(reference, bilinear, mhc, size=WORSE_SIZE, top=N_WORST,
+                                  rank_by=rank_by, margin=MARGIN, max_per_hint=MAX_PER_KIND)
+        for k, info in enumerate(found):
+            # The two rankings can find the same place, or the same kind; plot each once.
+            if any(abs(info["row"] - o["row"]) < WORSE_SIZE and abs(info["col"] - o["col"])
+                   < WORSE_SIZE for _, o in spots):
+                continue
+            if MAX_PER_KIND is not None and sum(o["hint"] == info["hint"]
+                                                for _, o in spots) >= MAX_PER_KIND:
+                continue
+            spots.append((f"{rank_by} #{k + 1}", info))
+    for k, (r0, c0) in enumerate(WORSE_CENTERS):
+        row = int(np.clip(r0 - WORSE_SIZE // 2, 0, reference.shape[0] - WORSE_SIZE))
+        col = int(np.clip(c0 - WORSE_SIZE // 2, 0, reference.shape[1] - WORSE_SIZE))
+        sl = (slice(row, row + WORSE_SIZE), slice(col, col + WORSE_SIZE))
+        mb = float(((bilinear - reference)[sl] ** 2).mean())
+        mm = float(((mhc - reference)[sl] ** 2).mean())
+        info = {"row": row, "col": col, "mse_bilinear": mb, "mse_mhc": mm,
+                "loss_db": 10 * np.log10(mm / mb)}
+        info.update(dm.describe_window(reference, row, col, WORSE_SIZE))
+        spots.append((f"by hand #{k + 1}", info))
+
+    print(f"DELIVERABLE {problem:02d}: places where MHC is worse than bilinear "
+          f"(loss > 0 dB = MHC worse; hint is a heuristic, check the figure)")
+    print(f"Reference image size: {reference.shape[1]}x{reference.shape[0]} | crop size: {WORSE_SIZE}x{WORSE_SIZE}")
+    print(f"\t{'found by':15s} {'row':>5s} {'col':>5s} {'loss dB':>8s} {'level':>6s} "
+          f"{'peak':>5s} {'chroma':>6s} {'coher.':>6s} {'radius':>6s}  hint")
+    rows = []
+    for k, (label, info) in enumerate(spots):
+        path = f"{output_path}{problem:02d}_mhc_worse_{k + 1}.png"
+        cf.plot_crop_comparison(reference, bilinear, mhc, info["row"], info["col"], WORSE_SIZE,
+                                path, f"Item {problem:02d} ({label}): {info['hint']}, "
+                                f"MHC {info['loss_db']:+.1f} dB worse", show=SHOW)
+        print(f"\t{label:15s} {info['row']:5d} {info['col']:5d} {info['loss_db']:+8.2f} "
+              f"{info['level']:6.3f} {info['peak']:5.2f} {info['chroma']:6.2f} "
+              f"{info['coherence']:6.2f} {info['radius']:6.2f}  {info['hint']}")
+        print(f"\t{'':15s} figure {path}")
+        rows.append((k + 1, label, info))
+
+    latex_file = f"{output_path}{problem:02d}_mhc_worse.txt"
+    lf.generate_table([[str(k) for k, _, _ in rows],
+                       [lab.replace("#", r"\#") for _, lab, _ in rows],
+                       [f"({i['row']}, {i['col']})" for _, _, i in rows],
+                       [f"{i['loss_db']:+.2f}" for _, _, i in rows],
+                       [f"{i['level']:.3f}" for _, _, i in rows],
+                       [f"{i['chroma']:.2f}" for _, _, i in rows],
+                       [i["hint"] for _, _, i in rows]],
+                      ["Fig.", "Found by", "Crop (row, col)", "MHC loss (dB)", "Level",
+                       "Chroma", "Hint"],
+                      caption=f"Places where MHC's error exceeds bilinear's, in "
+                              f"{WORSE_SIZE}-pixel crops of the single-frame reference. MHC "
+                              f"loss: $10\\log_{{10}}$ of the ratio of mean squared errors "
+                              f"(positive = MHC worse). Difference: ranked by the absolute "
+                              f"increase in mean squared error; ratio: by the loss in dB. "
+                              f"Level: mean green (saturation = 1). Chroma: 90th percentile of "
+                              f"(max $-$ min)/max of the gray-balanced color (0 = neutral). "
+                              f"Hint: a fixed-threshold heuristic, not a diagnosis.",
+                      output_path=latex_file, VERBOSE=False, align="rlrrrrl")
+    print(f"\tLaTeX for the report: {latex_file}")
 
