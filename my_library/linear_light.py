@@ -5,19 +5,30 @@ import cv2 as cv
 import psu_imaging as psu
 
 
-def green_plane_from_raw(raw, which_grn=0):
-    """One green plane of a rawpy-like object as linear light in [0, 1] (black removed,
-    divided by white - black). `which` picks the first (0) or second (1) green of the
-    2x2 pattern in raster order."""
+def green_plane_from_raw(raw, which_grn=0, black_level=None, saturation=None, clip=True,
+                         verbose=True):
+    """One green plane of a rawpy-like object as linear light, 0 at black and 1 at saturation.
+
+    `which_grn` picks the first (0) or second (1) green of the 2x2 pattern in raster order.
+    Defaults reproduce the original behavior (declared per-channel black level, WhiteLevel
+    tag, clipped to [0, 1], prints what it did). Overrides, used for bursts:
+      black_level  DN to subtract instead of the file's declared level (e.g. measured).
+      saturation   DN that maps to 1.0 instead of the WhiteLevel tag (e.g. measured).
+      clip         False keeps noise below black, needed before averaging (see
+                   raw_to_linear_light).
+      verbose      False silences the prints (22 frames x 2 lines is a lot of output).
+    """
     desc = raw.color_desc.decode() if isinstance(raw.color_desc, bytes) else raw.color_desc
     pattern = np.asarray(raw.raw_pattern)
     greens = [(r, c) for r in range(2) for c in range(2) if desc[pattern[r, c]] == "G"]
     r, c = greens[which_grn]
-    print(f'Extracting green plane from raw Bayer mosaic: {desc[pattern[r, c]]} at row {r}, col {c}')
-    black = float(raw.black_level_per_channel[pattern[r, c]])
-    print(f"Black level for this channel: {black}")
-    plane = raw.raw_image_visible[r::2, c::2].astype(float)
-    return np.clip((plane - black) / (raw.white_level - black), 0, 1)
+    black = float(raw.black_level_per_channel[pattern[r, c]]) if black_level is None else float(black_level)
+    white = raw.white_level if saturation is None else saturation
+    if verbose:
+        print(f'Extracting green plane from raw Bayer mosaic: {desc[pattern[r, c]]} at row {r}, col {c}')
+        print(f"Black level for this channel: {black}")
+    plane = raw.raw_image_visible[r::2, c::2]
+    return raw_to_linear_light(plane, black, white, clip=clip)
 
 
 def green_plane(path, which_grn=0):
