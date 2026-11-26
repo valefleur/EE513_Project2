@@ -11,6 +11,8 @@ Bayer slicing and burst-averaging ideas follow Professor James McNames' EE 513 d
 import argparse
 import os
 
+import numpy as np
+
 import my_library.burst as bu
 import my_library.image_metadata as im
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
@@ -61,3 +63,18 @@ if __name__ == "__main__":
     print(f"DELIVERABLE {problem:02d}: {info['n_frames']} frames; one half-size green image is "
           f"{info['shape'][0]} rows x {info['shape'][1]} columns (raw mosaic {info['raw_shape']}). "
           f"Value range {stack.min():.4f} to {stack.max():.4f}.")
+    problem = 2
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    """Item 2: align every frame to the first (phase correlation on a Hann-windowed pair,
+    then warpAffine back). Report the median and largest shift."""
+    aligned, shifts, responses = bu.align_to_first(stack)
+
+    # Frame 0 is the reference, so its zero shift is not a measurement; leave it out.
+    mags = np.hypot(shifts[1:, 0], shifts[1:, 1])
+    for i in range(1, len(stack)):
+        print(f"  frame {i:2d}: dx={shifts[i, 0]:+.3f} dy={shifts[i, 1]:+.3f} px "
+              f"|shift|={mags[i - 1]:.3f} px  peak={responses[i]:.3f}")
+    print(f"DELIVERABLE {problem:02d}: median shift {np.median(mags):.3f} px, "
+          f"largest shift {mags.max():.3f} px (magnitude sqrt(dx^2+dy^2), "
+          f"frames 1..{len(stack) - 1} relative to frame 0). "
+          f"Weakest correlation peak {np.nanmin(responses):.3f} vs median {np.nanmedian(responses):.3f}.")
