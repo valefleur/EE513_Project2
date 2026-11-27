@@ -1,9 +1,12 @@
-"""Burst loading: the same green sites from every raw frame, as linear light.
+"""Burst loading, alignment and averaging (HW7).
 
-Reuses ll.green_plane_from_raw (slicing + black/saturation normalization) and
-dm.cfa_pattern; this module only adds the loop over frames and the consistency checks.
-Burst-averaging idea follows Professor James McNames' EE 513 Lecture 11/12 demos
-(11_deep_learning_on_ramp_b.ipynb, 12_learned_restoration_and_isps_a.ipynb).
+Attribution: the METHODS in this module (green-site extraction, Hann-windowed phase
+correlation with cv2.phaseCorrelate, undoing the shift with cv2.warpAffine, averaging the
+aligned frames) are specified by Professor James McNames' EE 513 HW7 assignment; the
+implementations are mine. His notebooks (11_*, 12_*): they contain Bayer mosaicking
+from RGB and DnCNN training code, but no burst alignment or averaging, so no code here
+is copied from them. Each function's docstring says whether it follows the assignment
+or is original code to this project.
 """
 import cv2
 import numpy as np
@@ -25,6 +28,9 @@ def load_burst_green(paths, saturation, which=0, black_level=None, clip=False):
     black_level : float|None    DN to subtract; None uses each file's declared level.
     clip : bool                 False (default) keeps noise below black; the burst will
                                 be averaged and clipping would bias dark pixels upward.
+
+    Attribution: green-site slicing and normalization per Professor James McNames' HW7
+    assignment (Part 1); built on this repo's green_plane_from_raw.
 
     Returns
     -------
@@ -66,6 +72,9 @@ def estimate_shift(ref, img, window=None):
     pixel. The Hann window tapers the borders to zero so the FFT's implied periodic
     wrap-around does not create a false strong edge (spectral leakage).
 
+    Attribution: method (cv2.phaseCorrelate on a Hann-windowed pair) per Professor James
+    McNames' HW7 assignment (Part 1, item 2); implementation mine.
+
     Parameters
     ----------
     ref, img : (H, W) float32 arrays, same shape.
@@ -80,19 +89,24 @@ def estimate_shift(ref, img, window=None):
     """
     if window is None:
         window = _hann_window(ref.shape)
+    if img.shape[0] %2 == 1 or img.shape[1] %2 == 1:
+        print(f"WARNING: One or both dimensions of the image is odd ({img.shape}), which can cause phase correlation to be inaccurate. Consider cropping or using a different approach.")
     (dx, dy), response = cv2.phaseCorrelate(ref.astype(np.float32), img.astype(np.float32), window)
     return dx, dy, response
 
 
-def undo_shift(img, dx, dy):
+def undo_shift(img, dx, dy, interpolation=cv2.INTER_LINEAR):
     """Move img back by the shift that estimate_shift reported, so it lines up with ref.
 
     Pass estimate_shift's (dx, dy) straight in; the sign reversal lives here. estimate_shift
     says "img's content sits dx right / dy down of ref's", and cv2.warpAffine with
     M = [[1, 0, t_x], [0, 1, t_y]] moves content by +t, so undoing needs t = -(dx, dy).
 
-    Resampling details (cv2.warpAffine):
-      INTER_LINEAR (also OpenCV's default, written out for clarity): each output pixel is
+    Attribution: cv2.warpAffine step per Professor James McNames' HW7 assignment; the
+    interpolation/border analysis below is mine.
+
+    Resampling details (cv2.warpAffine); `interpolation` selects the kernel:
+      INTER_LINEAR (default, also OpenCV's default): each output pixel is
         a weighted mean of its 4 nearest inputs. Cubic/Lanczos sharpen better but overshoot
         and ring near edges, which would put values below black and above saturation.
       BORDER_REFLECT: the strip the shift uncovers needs *some* value. OpenCV's default,
@@ -108,14 +122,28 @@ def undo_shift(img, dx, dy):
     """
     M = np.array([[1, 0, -dx], [0, 1, -dy]], dtype=np.float64)
     h, w = img.shape
-    return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR,   # dsize is (width, height)
+    return cv2.warpAffine(img, M, (w, h), flags=interpolation,   # dsize is (width, height)
                           borderMode=cv2.BORDER_REFLECT)
 
 
-def align_to_first(stack):
+def apply_shifts(stack, shifts, interpolation=cv2.INTER_LINEAR):
+    """Undo per-frame (dx, dy) shifts (as reported by estimate_shift) on an (N, H, W) stack.
+
+    Frames whose shift is exactly (0, 0) (frame 0) are copied untouched. Original to this
+    project.
+    """
+    aligned = np.empty(stack.shape, np.float32)
+    for i, (dx, dy) in enumerate(shifts):
+        aligned[i] = stack[i] if (dx == 0 and dy == 0) else undo_shift(stack[i], dx, dy, interpolation)
+    return aligned
+
+
+def align_to_first(stack, interpolation=cv2.INTER_LINEAR):
     """Align every frame of a (N, H, W) float stack to frame 0.
 
-    Each frame's shift is measured with estimate_shift and undone with undo_shift. Frame 0 is returned untouched.
+    Each frame's shift is measured with estimate_shift and undone with undo_shift.
+    Frame 0 is returned untouched. Method per Professor James McNames' HW7 assignment
+    (Part 1, item 2); implementation mine.
 
     Returns
     -------
@@ -123,16 +151,13 @@ def align_to_first(stack):
     shifts : (N, 2) array of (dx, dy) in pixels, row 0 = (0, 0)
     responses : (N,) phase-correlation peak heights (row 0 = NaN, nothing was measured)
     """
-    n, h, w = stack.shape
-    window = _hann_window((h, w))
-    aligned = np.empty(stack.shape, np.float32)
-    aligned[0] = stack[0]
-    shifts, responses = np.zeros((n, 2)), np.full(n, np.nan)
-    for i in range(1, n):
+    window = _hann_window(stack.shape[1:])
+    shifts = np.zeros((len(stack), 2))
+    responses = np.full(len(stack), np.nan)
+    for i in range(1, len(stack)):
         dx, dy, resp = estimate_shift(stack[0], stack[i], window)
         shifts[i], responses[i] = (dx, dy), resp
-        aligned[i] = undo_shift(stack[i], dx, dy)
-    return aligned, shifts, responses
+    return apply_shifts(stack, shifts, interpolation), shifts, responses
 
 
 def valid_margin(shifts):
@@ -143,6 +168,8 @@ def valid_margin(shifts):
 
 def average_burst(aligned):
     """Per-pixel mean over frames of an aligned (N, H, W) stack, accumulated in float64.
+
+    Method per Professor James McNames' HW7 assignment (Part 1, item 3); implementation mine.
 
     For N frames with independent zero-mean noise of standard deviation sigma, the mean has
     noise sigma / sqrt(N): 16 frames -> 1/4, 64 frames -> 1/8. (Residual noise of the
@@ -215,3 +242,58 @@ def crosscheck_shifts_skimage(stack, shifts, upsample_factor=100):
         sk, _, _ = phase_cross_correlation(ref, stack[i] * win, upsample_factor=upsample_factor)
         diff[i] = shifts[i] - (-sk[1], -sk[0])          # skimage is (row, col) = (dy, dx)
     return diff
+
+
+def estimate_shift_ecc(ref, img, gauss_filt_size=5, iterations=200, eps=1e-6):
+    """Third, independent shift estimate: ECC (enhanced correlation coefficient) maximization.
+
+    Uses OpenCV's cv2.findTransformECC.
+
+    Unlike phase correlation (a Fourier-phase method that weights every frequency equally,
+    including noise-dominated ones), ECC searches for the translation that maximizes the
+    normalized correlation of the *intensities* by Gauss-Newton iteration, after a Gaussian
+    smoothing (`gauss_filt_size`) that suppresses noise. Agreement between two methods that
+    fail in different ways is better evidence than either alone. For MOTION_TRANSLATION the
+    returned translation has the same sign convention as estimate_shift (checked by test).
+
+    Returns
+    -------
+    (dx, dy) in pixels, or (nan, nan) if ECC does not converge.
+    """
+    warp = np.eye(2, 3, dtype=np.float32)
+    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, iterations, eps)
+    try:
+        _, warp = cv2.findTransformECC(ref.astype(np.float32), img.astype(np.float32), warp,
+                                       cv2.MOTION_TRANSLATION, crit, None, gauss_filt_size)
+    except cv2.error:
+        return np.nan, np.nan
+    return float(warp[0, 2]), float(warp[1, 2])
+
+
+def alignment_residuals(stack, shifts, interpolation=cv2.INTER_LINEAR, margin=4, sigma=2.0):
+    """RMS difference to frame 0 of each frame after undoing `shifts`, on Gaussian-smoothed images.
+
+    This scores an alignment by its OUTCOME, needing no ground-truth shift: if the shifts are right,
+    the aligned frame should match frame 0 better than the unaligned one. Smoothing (Gaussian,
+    `sigma` pixels) keeps noise from dominating, and the same smoothing is applied to every candidate,
+    so methods are compared on equal footing. Note the warp itself also smooths; at equal `sigma` that
+    is part of what is being scored (a method that blurs away detail can look 'better').
+
+    Returns (N,) array; entry 0 is NaN.
+    """
+    ref = cv2.GaussianBlur(stack[0].astype(np.float32), (0, 0), sigma)
+    m = slice(margin, -margin), slice(margin, -margin)
+    out = np.full(len(stack), np.nan)
+    for i in range(1, len(stack)):
+        img = undo_shift(stack[i], *shifts[i], interpolation) if np.any(shifts[i]) else stack[i]
+        img = cv2.GaussianBlur(img.astype(np.float32), (0, 0), sigma)
+        out[i] = np.sqrt(np.mean((img[m] - ref[m]) ** 2))
+    return out
+
+
+def frame_gains(stack, margin=0):
+    """Mean level of each frame relative to frame 0 (interior only). 1.0 means no brightness
+    change; a steady trend means lighting or exposure drifted during the burst."""
+    inner = stack[:, margin:stack.shape[1] - margin, margin:stack.shape[2] - margin]
+    m = inner.reshape(len(stack), -1).mean(axis=1, dtype=np.float64)
+    return m / m[0]

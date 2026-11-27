@@ -188,3 +188,41 @@ def test_crosscheck_shifts_skimage_small_on_clean_known_shifts():
 
 def test_valid_margin_covers_largest_shift():
     assert bu.valid_margin(np.array([[0, 0], [2.3, -4.6]])) == 6
+
+
+# ---- third estimator, outcome score, drift -------------------------------------------------
+@pytest.mark.parametrize("dx,dy", [(3.3, -2.1), (-0.4, 0.7), (0.5, 0.5)])
+def test_ecc_recovers_known_shift_with_same_sign_as_phase_correlation(dx, dy):
+    ref = _scene(7)
+    ref = (ref - ref.min()) / np.ptp(ref)
+    img = nd_shift(ref, (dy, dx), order=3, mode="reflect").astype(np.float32)
+    ex, ey = bu.estimate_shift_ecc(ref, img)
+    px, py, _ = bu.estimate_shift(ref, img)
+    assert abs(ex - dx) < 0.1 and abs(ey - dy) < 0.1
+    assert abs(ex - px) < 0.3 and abs(ey - py) < 0.3          # two methods, one sign convention
+
+
+def test_alignment_residual_drops_with_correct_shifts_and_not_with_wrong_ones():
+    ref = _scene(8)
+    true = [(0, 0), (1.5, -0.8), (-2.2, 1.3)]
+    st = np.stack([nd_shift(ref, (dy, dx), order=3, mode="reflect") for dx, dy in true]).astype(np.float32)
+    none = bu.alignment_residuals(st, np.zeros((3, 2)))[1:]
+    good = bu.alignment_residuals(st, np.array(true, float))[1:]
+    bad = bu.alignment_residuals(st, np.array([(0, 0), (-1.5, 0.8), (2.2, -1.3)], float))[1:]   # wrong sign
+    assert np.all(good < 0.3 * none) and np.all(bad > none)
+
+
+def test_cubic_beats_linear_on_a_fractional_shift():
+    """Analytic motivation: bilinear attenuates detail at fractional shifts (cos(pi*nu) at
+    half pixel), cubic much less. Both must beat doing nothing."""
+    ref = _scene(9, (200, 200))
+    img = nd_shift(ref, (0.5, 0.5), order=3, mode="reflect").astype(np.float32)
+    err = lambda out: np.sqrt(np.mean((out[8:-8, 8:-8] - ref[8:-8, 8:-8]) ** 2)) # MSE
+    lin = err(bu.undo_shift(img, 0.5, 0.5, cv2.INTER_LINEAR))
+    cub = err(bu.undo_shift(img, 0.5, 0.5, cv2.INTER_CUBIC))
+    assert cub < lin < err(img)
+
+
+def test_frame_gains_report_scaling_and_trend():
+    st = np.stack([np.full((20, 30), 0.5, np.float32) * g for g in (1.0, 1.01, 1.02)])
+    assert np.allclose(bu.frame_gains(st), [1.0, 1.01, 1.02])

@@ -5,12 +5,14 @@ Run:  uv run python hw7.py                       # all frames of the burst set b
       uv run python hw7.py --burst-dir images/iPhone16/Lightroom/Project2/Still-Life/stable/set3_ISO2000
 
 Stands alone from Project 2 but calls the same my_library functions the pipeline will use.
-Bayer slicing and burst-averaging ideas follow Professor James McNames' EE 513 demos
-(11_deep_learning_on_ramp_b.ipynb section 1; 12_learned_restoration_and_isps_a.ipynb).
+Methods for problems 1-3 (green sites, phase-correlation alignment, averaging) are specified
+by Professor James McNames' EE 513 HW7 assignment; see my_library/burst.py for per-function
+attribution. Notebook code from his Lecture 11/12 demos is   credited where it is used.
 """
 import argparse
 import os
 
+import cv2
 import numpy as np
 
 import my_library.burst as bu
@@ -76,10 +78,27 @@ if __name__ == "__main__":
     for i in range(1, len(stack)):
         print(f"  frame {i:2d}: dx={shifts[i, 0]:+.3f} dy={shifts[i, 1]:+.3f} px "
               f"|shift|={mags[i - 1]:.3f} px  peak={responses[i]:.3f}")
-    # Real-data cross-check: re-measure every shift with scikit-image (independent implementation).
+    # Real-data cross-checks: two independent estimators, then the outcome score.
     sk_diff = bu.crosscheck_shifts_skimage(stack, shifts)[1:]
-    print(f"CHECK 02: cv2 vs scikit-image shifts on this burst: median |diff| "
-          f"{np.median(np.abs(sk_diff)):.3f} px, max |diff| {np.abs(sk_diff).max():.3f} px (dx and dy).")
+    sk_shifts = shifts[1:] - sk_diff                      # skimage's own (dx, dy)
+    ecc_shifts = np.array([bu.estimate_shift_ecc(stack[0], stack[i]) for i in range(1, len(stack))])
+    d = lambda p, q: np.abs(p - q)
+    print(f"CHECK 02a: shift disagreement between estimators (px, over dx and dy, frames 1..): "
+          f"cv2-vs-skimage median {np.median(d(shifts[1:], sk_shifts)):.3f} max {d(shifts[1:], sk_shifts).max():.3f}; "
+          f"cv2-vs-ECC median {np.nanmedian(d(shifts[1:], ecc_shifts)):.3f} max {np.nanmax(d(shifts[1:], ecc_shifts)):.3f}; "
+          f"skimage-vs-ECC median {np.nanmedian(d(sk_shifts, ecc_shifts)):.3f} max {np.nanmax(d(sk_shifts, ecc_shifts)):.3f}.")
+    print(f"          ECC |shift| median {np.nanmedian(np.hypot(*ecc_shifts.T)):.3f} px, "
+          f"skimage |shift| median {np.median(np.hypot(*sk_shifts.T)):.3f} px, "
+          f"cv2 |shift| median {np.median(mags):.3f} px.")
+    # Which shifts actually line frames up? Score by outcome (RMS to frame 0 on smoothed images).
+    all_shifts = {"cv2 phase corr": shifts, "skimage": np.vstack([[0, 0], sk_shifts]),
+                  "ECC": np.vstack([[0, 0], np.nan_to_num(ecc_shifts)])}
+    none = np.nanmedian(bu.alignment_residuals(stack, np.zeros_like(shifts)))
+    print(f"CHECK 02b: median smoothed RMS difference to frame 0 (lower = better aligned); unaligned {none:.5f}")
+    for name, sh in all_shifts.items():
+        for iname, interp in (("linear", cv2.INTER_LINEAR), ("cubic", cv2.INTER_CUBIC), ("lanczos4", cv2.INTER_LANCZOS4)):
+            r = np.nanmedian(bu.alignment_residuals(stack, sh, interp))
+            print(f"          {name:15s} + {iname:8s}: {r:.5f}  ({r / none:.3f} x unaligned)")
     print(f"DELIVERABLE {problem:02d}: median shift {np.median(mags):.3f} px, "
           f"largest shift {mags.max():.3f} px (magnitude sqrt(dx^2+dy^2), "
           f"frames 1..{len(stack) - 1} relative to frame 0). "
@@ -101,17 +120,19 @@ if __name__ == "__main__":
 
     # Real-data checks (not just synthetic unit tests).
     sl = (slice(row, row + crop_size), slice(col, col + crop_size))
+    sigma_t = np.sqrt(stack[:, sl[0], sl[1]].astype(np.float64).var(axis=0, ddof=1)).mean() # average of the sqrt of the variation on the crop
     resid = stack[0][sl] - average[sl]
-    print(f"CHECK 03a: crop noise std: single frame minus average {resid.std():.5f}; "
-          f"expected sigma*sqrt(1-1/N) = sigma*{np.sqrt(1 - 1 / len(stack)):.3f} (frame 0 is part of the mean).")
+    print(f"CHECK 03a: crop noise std of (frame 0 - average) {resid.std():.5f}; prediction from the "
+          f"temporal std of the raw frames {sigma_t:.5f} x sqrt(1-1/N) = {sigma_t * np.sqrt(1 - 1 / len(stack)):.5f}. "
+          f"(Temporal std also contains drift and misregistration, so it can only over-predict.)")
     ratios = bu.half_split_noise_check(aligned, margin)
     print(f"CHECK 03b: measured/predicted variance of (mean of half A - mean of half B), 1.0 = pure "
           f"independent noise: even/odd {ratios['even_odd']:.2f}, first/second half {ratios['first_second']:.2f}. "
           f"A first/second value well above even/odd means the scene or exposure drifted during the burst.")
-    unaligned_avg = stack.mean(axis=0, dtype=np.float64)
-    g = lambda im: np.hypot(*np.gradient(im[sl])).mean()
-    print(f"CHECK 03c: mean gradient magnitude in the crop: aligned average {g(average):.5f} vs "
-          f"unaligned average {g(unaligned_avg):.5f} (ratio {g(average) / g(unaligned_avg):.3f}; > 1 means alignment kept detail).")
+    gains = bu.frame_gains(stack, margin)
+    trend = np.polyfit(np.arange(len(gains)), gains, 1)[0] * (len(gains) - 1)
+    print(f"CHECK 03c: mean level of each frame relative to frame 0: min {gains.min():.4f}, max {gains.max():.4f}, "
+          f"linear trend over the burst {trend:+.4f}. Per frame: " + " ".join(f"{g:.4f}" for g in gains))
     print(f"DELIVERABLE {problem:02d}: figure {OUTPUT_PATH}p{problem:02d}_frame_vs_average.png "
           f"(crop rows {row}:{row + crop_size}, cols {col}:{col + crop_size}; display window {lo:.4f}-{hi:.4f}, "
           f"gamma 2.2; N={len(stack)}).")

@@ -1,7 +1,8 @@
 """burst_figures.py -- figures for the burst-averaging problems (HW7).
 
-Layout idea after crop_figures.plot_crop_comparison (HW5). Written with help from Claude
-(Anthropic); concepts follow Professor James McNames' EE 513 Lecture 11/12 notebooks.
+Attribution: plot_frame_vs_average follows the layout idea of crop_figures.plot_crop_comparison,
+which itself follows fig_zippering() in make_figures_07.py by Professor James McNames
+(EE 513 Lecture 7). No other code here is borrowed. Written with help from Claude (Anthropic).
 """
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,9 @@ def display_map(img, lo, hi, gamma=2.2):
 
 def plot_frame_vs_average(frame, average, row, col, size, path, title, gamma=2.2, show=False):
     """Save a side-by-side figure of one crop: a single frame and the burst average.
+
+    Attribution: layout based on crop_figures.plot_crop_comparison / Professor James McNames'
+    fig_zippering() (Lecture 7); the display mapping and content are ours.
 
     Both panels use the same crop, the same display window (0.5th to 99.5th percentile of
     the AVERAGE's crop) and the same gamma, drawn with nearest-neighbor so each data pixel
