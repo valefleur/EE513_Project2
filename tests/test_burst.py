@@ -137,3 +137,54 @@ def test_default_border_is_constant_zero_but_ours_is_not():
     M = np.float32([[1, 0, 2], [0, 1, 0]])
     assert cv2.warpAffine(a, M, (8, 6))[0, 0] == 0                       # OpenCV default
     assert bu.undo_shift(a, -2, 0)[0, 0] == 1                            # reflect keeps values
+
+
+# ---- averaging, crop choice, real-data checks ----------------------------------------------
+def _noisy_stack(n, sigma=0.05, shape=(120, 160), seed=0):
+    rng = np.random.default_rng(seed)
+    return (_scene(seed, shape)[None] + sigma * rng.standard_normal((n,) + shape)).astype(np.float32)
+
+
+@pytest.mark.parametrize("n", [4, 16, 64])
+def test_average_noise_falls_as_one_over_sqrt_n(n):
+    """Analytic: std of the mean of N independent frames is sigma / sqrt(N)."""
+    st = _noisy_stack(n, 0.05)
+    resid = bu.average_burst(st) - _scene(0, (120, 160))
+    assert abs(resid.std() - 0.05 / np.sqrt(n)) < 0.15 * 0.05 / np.sqrt(n)
+
+
+def test_average_matches_numpy_mean_in_float64():
+    st = _noisy_stack(5)
+    assert np.allclose(bu.average_burst(st), st.astype(np.float64).mean(0)) and bu.average_burst(st).dtype == np.float64
+
+
+def test_find_detail_crop_picks_textured_window_and_avoids_clipping():
+    img = np.full((200, 300), 0.3, np.float32)
+    img[50:114, 180:244] += 0.2 * np.random.default_rng(0).standard_normal((64, 64)).astype(np.float32)
+    r, c = bu.find_detail_crop(np.clip(img, 0, 0.9), 64)
+    assert 36 <= r <= 64 and 166 <= c <= 194
+    img[50:114, 180:244] = 1.0                                         # clipped now
+    img[150:180, 20:60] = np.tile([0.2, 0.6], (30, 20))                # fine stripes elsewhere
+    r, c = bu.find_detail_crop(img, 32)
+    assert r + 32 > 150 and c < 60 and not np.any(img[r:r + 32, c:c + 32] > 0.98)
+
+
+def test_half_split_ratio_is_one_for_iid_noise_and_flags_drift():
+    st = _noisy_stack(32, 0.05)
+    r = bu.half_split_noise_check(st)
+    assert 0.9 < r["even_odd"] < 1.1 and 0.9 < r["first_second"] < 1.1
+    drift = st + (0.05 * np.linspace(0, 1, 32))[:, None, None].astype(np.float32)   # slow brightening
+    r = bu.half_split_noise_check(drift)
+    assert r["first_second"] > 1.5 and 0.9 < r["even_odd"] < 1.3
+
+
+def test_crosscheck_shifts_skimage_small_on_clean_known_shifts():
+    ref = _scene(5)
+    true = [(0, 0), (1.5, -0.8), (-2.2, 1.3)]
+    st = np.stack([nd_shift(ref, (dy, dx), order=3, mode="reflect") for dx, dy in true]).astype(np.float32)
+    _, shifts, _ = bu.align_to_first(st)
+    assert np.abs(bu.crosscheck_shifts_skimage(st, shifts)).max() < 0.25
+
+
+def test_valid_margin_covers_largest_shift():
+    assert bu.valid_margin(np.array([[0, 0], [2.3, -4.6]])) == 6

@@ -14,6 +14,7 @@ import os
 import numpy as np
 
 import my_library.burst as bu
+import my_library.burst_figures as bf
 import my_library.image_metadata as im
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
 
@@ -63,6 +64,7 @@ if __name__ == "__main__":
     print(f"DELIVERABLE {problem:02d}: {info['n_frames']} frames; one half-size green image is "
           f"{info['shape'][0]} rows x {info['shape'][1]} columns (raw mosaic {info['raw_shape']}). "
           f"Value range {stack.min():.4f} to {stack.max():.4f}.")
+
     problem = 2
     print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     """Item 2: align every frame to the first (phase correlation on a Hann-windowed pair,
@@ -74,7 +76,42 @@ if __name__ == "__main__":
     for i in range(1, len(stack)):
         print(f"  frame {i:2d}: dx={shifts[i, 0]:+.3f} dy={shifts[i, 1]:+.3f} px "
               f"|shift|={mags[i - 1]:.3f} px  peak={responses[i]:.3f}")
+    # Real-data cross-check: re-measure every shift with scikit-image (independent implementation).
+    sk_diff = bu.crosscheck_shifts_skimage(stack, shifts)[1:]
+    print(f"CHECK 02: cv2 vs scikit-image shifts on this burst: median |diff| "
+          f"{np.median(np.abs(sk_diff)):.3f} px, max |diff| {np.abs(sk_diff).max():.3f} px (dx and dy).")
     print(f"DELIVERABLE {problem:02d}: median shift {np.median(mags):.3f} px, "
           f"largest shift {mags.max():.3f} px (magnitude sqrt(dx^2+dy^2), "
           f"frames 1..{len(stack) - 1} relative to frame 0). "
           f"Weakest correlation peak {np.nanmin(responses):.3f} vs median {np.nanmedian(responses):.3f}.")
+
+    problem = 3
+    print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
+    """Item 3: average the aligned frames (the clean image) and show one frame next to the
+    average, same crop, same display scale, somewhere with fine detail."""
+    average = bu.average_burst(aligned)
+    margin = bu.valid_margin(shifts)                 # keep reflected-border fill out of the crop
+    crop_size = 256
+    row, col = bu.find_detail_crop(average, crop_size, margin)
+    lo, hi = bf.plot_frame_vs_average(
+        stack[0], average, row, col, crop_size,
+        f"{OUTPUT_PATH}p{problem:02d}_frame_vs_average.png",
+        f"HW7 problem 3: one frame vs the average of {len(stack)} aligned frames "
+        f"({burst_path.rstrip('/').split('/')[-1]})", show=SHOW)
+
+    # Real-data checks (not just synthetic unit tests).
+    sl = (slice(row, row + crop_size), slice(col, col + crop_size))
+    resid = stack[0][sl] - average[sl]
+    print(f"CHECK 03a: crop noise std: single frame minus average {resid.std():.5f}; "
+          f"expected sigma*sqrt(1-1/N) = sigma*{np.sqrt(1 - 1 / len(stack)):.3f} (frame 0 is part of the mean).")
+    ratios = bu.half_split_noise_check(aligned, margin)
+    print(f"CHECK 03b: measured/predicted variance of (mean of half A - mean of half B), 1.0 = pure "
+          f"independent noise: even/odd {ratios['even_odd']:.2f}, first/second half {ratios['first_second']:.2f}. "
+          f"A first/second value well above even/odd means the scene or exposure drifted during the burst.")
+    unaligned_avg = stack.mean(axis=0, dtype=np.float64)
+    g = lambda im: np.hypot(*np.gradient(im[sl])).mean()
+    print(f"CHECK 03c: mean gradient magnitude in the crop: aligned average {g(average):.5f} vs "
+          f"unaligned average {g(unaligned_avg):.5f} (ratio {g(average) / g(unaligned_avg):.3f}; > 1 means alignment kept detail).")
+    print(f"DELIVERABLE {problem:02d}: figure {OUTPUT_PATH}p{problem:02d}_frame_vs_average.png "
+          f"(crop rows {row}:{row + crop_size}, cols {col}:{col + crop_size}; display window {lo:.4f}-{hi:.4f}, "
+          f"gamma 2.2; N={len(stack)}).")
