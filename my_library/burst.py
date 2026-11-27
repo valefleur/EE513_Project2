@@ -2,12 +2,12 @@
 
 Attribution: the METHODS in this module (green-site extraction, Hann-windowed phase
 correlation with cv2.phaseCorrelate, undoing the shift with cv2.warpAffine, averaging the
-aligned frames) are specified by Professor James McNames' EE 513 HW7 assignment; the
-implementations are mine. His notebooks (11_*, 12_*): they contain Bayer mosaicking
-from RGB and DnCNN training code, but no burst alignment or averaging, so no code here
-is copied from them. Each function's docstring says whether it follows the assignment
-or is original code to this project.
+aligned frames) are specified by Professor James McNames' EE 513 HW7 assignment. His
+notebooks (11_*, 12_*) contain Bayer mosaicking from RGB and DnCNN training code but no
+burst alignment or averaging, so no code here is copied from them.
 """
+import functools
+
 import cv2
 import numpy as np
 import rawpy
@@ -52,6 +52,7 @@ def load_burst_green(paths, saturation, which=0, black_level=None, clip=False):
                        n_frames=len(stack), shape=stack.shape[1:], raw_shape=first[2])
 
 
+@functools.lru_cache(maxsize=8)
 def _hann_window(shape):
     """Hann window for an image of NumPy `shape` = (H, W).
 
@@ -62,7 +63,30 @@ def _hann_window(shape):
     return cv2.createHanningWindow((w, h), cv2.CV_32F)
 
 
-def estimate_shift(ref, img, window=None):
+def dft_safe_size(n):
+    """Largest m <= n with cv2.getOptimalDFTSize(m) == m and m even.
+
+    cv2.phaseCorrelate zero-pads every axis up to getOptimalDFTSize(n). When that padded
+    size is ODD, the returned shift on that axis is wrong by +0.5 px (verified on synthetic
+    data with a known shift; see tests and DECISIONS_AND_VERIFICATION.md). Note the odd
+    size is the PADDED size, not the image size: 2016 is even but pads to 2025. 2000 needs
+    no padding and is even. Cropping to a size that equals its own optimal DFT size avoids
+    both the padding and the bias.
+    """
+    for m in range(n, 1, -1):
+        if m % 2 == 0 and cv2.getOptimalDFTSize(m) == m:
+            return m
+    raise ValueError(f"no DFT-safe size at or below {n}")
+
+
+def _center_crop(shape):
+    """Slices that center-crop an image of NumPy `shape` = (H, W) to (dft_safe_size(H), dft_safe_size(W))."""
+    h, w = (dft_safe_size(n) for n in shape)
+    r0, c0 = (shape[0] - h) // 2, (shape[1] - w) // 2
+    return slice(r0, r0 + h), slice(c0, c0 + w)
+
+
+def estimate_shift(ref, img, crop_to_safe_size=True):
     """Sub-pixel translation of `img` relative to `ref` by phase correlation.
 
     Math: if img(x) = ref(x - d), their Fourier transforms differ only by a phase ramp,
@@ -72,13 +96,22 @@ def estimate_shift(ref, img, window=None):
     pixel. The Hann window tapers the borders to zero so the FFT's implied periodic
     wrap-around does not create a false strong edge (spectral leakage).
 
+    The shift is measured on a center crop whose sides are DFT-safe (dft_safe_size) because
+    cv2.phaseCorrelate is off by +0.5 px on any axis that pads to an odd size. A translation
+    measured on the crop is the translation of the whole image. For the 1512 x 2016 green
+    plane the crop is 1500 x 2000.
+
+    Inputs are copied before the call: in OpenCV 5.0 phaseCorrelate multiplies its input
+    arrays by the window IN PLACE when no padding is needed, which would silently corrupt
+    the caller's frames.
+
     Attribution: method (cv2.phaseCorrelate on a Hann-windowed pair) per Professor James
-    McNames' HW7 assignment (Part 1, item 2); implementation mine.
+    McNames' HW7 assignment (Part 1, item 2).
 
     Parameters
     ----------
-    ref, img : (H, W) float32 arrays, same shape.
-    window : optional precomputed _hann_window(ref.shape).
+    ref, img : (H, W) float arrays, same shape.
+    crop_to_safe_size : set False only to demonstrate the odd-padding bias on the full frame.
 
     Returns
     -------
@@ -87,11 +120,10 @@ def estimate_shift(ref, img, window=None):
         normalized to 1, so compare it ACROSS frames; a frame far below its siblings has
         an unreliable shift.
     """
-    if window is None:
-        window = _hann_window(ref.shape)
-    if img.shape[0] %2 == 1 or img.shape[1] %2 == 1:
-        print(f"WARNING: One or both dimensions of the image is odd ({img.shape}), which can cause phase correlation to be inaccurate. Consider cropping or using a different approach.")
-    (dx, dy), response = cv2.phaseCorrelate(ref.astype(np.float32), img.astype(np.float32), window)
+    sl = _center_crop(ref.shape) if crop_to_safe_size else (slice(None), slice(None))
+    a = np.array(ref[sl], dtype=np.float32, copy=True)
+    b = np.array(img[sl], dtype=np.float32, copy=True)
+    (dx, dy), response = cv2.phaseCorrelate(a, b, _hann_window(a.shape))
     return dx, dy, response
 
 
@@ -102,8 +134,7 @@ def undo_shift(img, dx, dy, interpolation=cv2.INTER_LINEAR):
     says "img's content sits dx right / dy down of ref's", and cv2.warpAffine with
     M = [[1, 0, t_x], [0, 1, t_y]] moves content by +t, so undoing needs t = -(dx, dy).
 
-    Attribution: cv2.warpAffine step per Professor James McNames' HW7 assignment; the
-    interpolation/border analysis below is mine.
+    Attribution: cv2.warpAffine step per Professor James McNames' HW7 assignment.
 
     Resampling details (cv2.warpAffine); `interpolation` selects the kernel:
       INTER_LINEAR (default, also OpenCV's default): each output pixel is
@@ -129,8 +160,7 @@ def undo_shift(img, dx, dy, interpolation=cv2.INTER_LINEAR):
 def apply_shifts(stack, shifts, interpolation=cv2.INTER_LINEAR):
     """Undo per-frame (dx, dy) shifts (as reported by estimate_shift) on an (N, H, W) stack.
 
-    Frames whose shift is exactly (0, 0) (frame 0) are copied untouched. Original to this
-    project.
+    Frames whose shift is exactly (0, 0) (frame 0) are copied untouched.
     """
     aligned = np.empty(stack.shape, np.float32)
     for i, (dx, dy) in enumerate(shifts):
@@ -143,7 +173,7 @@ def align_to_first(stack, interpolation=cv2.INTER_LINEAR):
 
     Each frame's shift is measured with estimate_shift and undone with undo_shift.
     Frame 0 is returned untouched. Method per Professor James McNames' HW7 assignment
-    (Part 1, item 2); implementation mine.
+    (Part 1, item 2).
 
     Returns
     -------
@@ -151,11 +181,10 @@ def align_to_first(stack, interpolation=cv2.INTER_LINEAR):
     shifts : (N, 2) array of (dx, dy) in pixels, row 0 = (0, 0)
     responses : (N,) phase-correlation peak heights (row 0 = NaN, nothing was measured)
     """
-    window = _hann_window(stack.shape[1:])
     shifts = np.zeros((len(stack), 2))
     responses = np.full(len(stack), np.nan)
     for i in range(1, len(stack)):
-        dx, dy, resp = estimate_shift(stack[0], stack[i], window)
+        dx, dy, resp = estimate_shift(stack[0], stack[i])
         shifts[i], responses[i] = (dx, dy), resp
     return apply_shifts(stack, shifts, interpolation), shifts, responses
 
@@ -169,7 +198,7 @@ def valid_margin(shifts):
 def average_burst(aligned):
     """Per-pixel mean over frames of an aligned (N, H, W) stack, accumulated in float64.
 
-    Method per Professor James McNames' HW7 assignment (Part 1, item 3); implementation mine.
+    Method per Professor James McNames' HW7 assignment (Part 1, item 3).
 
     For N frames with independent zero-mean noise of standard deviation sigma, the mean has
     noise sigma / sqrt(N): 16 frames -> 1/4, 64 frames -> 1/8. (Residual noise of the

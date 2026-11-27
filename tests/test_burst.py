@@ -226,3 +226,42 @@ def test_cubic_beats_linear_on_a_fractional_shift():
 def test_frame_gains_report_scaling_and_trend():
     st = np.stack([np.full((20, 30), 0.5, np.float32) * g for g in (1.0, 1.01, 1.02)])
     assert np.allclose(bu.frame_gains(st), [1.0, 1.01, 1.02])
+
+
+# ---- cv2.phaseCorrelate quirks (found on real data) -----------------------------------------
+def _pc_raw(a, b):
+    """cv2.phaseCorrelate exactly as the assignment describes, with no workaround."""
+    a, b = a.astype(np.float32).copy(), b.astype(np.float32).copy()     # copies: cv2.phaseCorrelate can modify inputs
+    h, w = a.shape
+    return cv2.phaseCorrelate(a, b, cv2.createHanningWindow((w, h), cv2.CV_32F))[0]
+
+
+def test_dft_safe_size_is_even_and_its_own_optimal_size():
+    assert bu.dft_safe_size(2016) == 2000 and bu.dft_safe_size(1512) == 1500
+    for n in (100, 361, 368, 1000, 1512, 2016):
+        m = bu.dft_safe_size(n)
+        assert m <= n and m % 2 == 0 and cv2.getOptimalDFTSize(m) == m
+
+
+@pytest.mark.parametrize("shape", [(256, 368), (368, 256), (368, 368)])
+def test_estimate_shift_is_unbiased_where_raw_cv2_is_off_by_half_a_pixel(shape):
+    """Sizes 361-375 pad to 375 (odd). Raw cv2 is then off by ~+0.5 px on that axis."""
+    ref = _scene(11, shape)
+    true = (0.05, -0.05)                                                # (dx, dy)
+    img = nd_shift(ref, (true[1], true[0]), order=3, mode="reflect").astype(np.float32)
+    rdx, rdy = _pc_raw(ref, img)
+    if max(abs(rdx - true[0]), abs(rdy - true[1])) < 0.3:
+        pytest.skip("this OpenCV build no longer shows the odd-padded-size bias")
+    dx, dy, _ = bu.estimate_shift(ref, img)
+    assert abs(dx - true[0]) < 0.1 and abs(dy - true[1]) < 0.1
+    assert max(abs(rdx - true[0]), abs(rdy - true[1])) > 0.4            # documents the library quirk
+
+
+def test_estimate_shift_does_not_modify_its_inputs():
+    """OpenCV 5.0's phaseCorrelate multiplies its inputs by the window in place when no
+    padding is needed; estimate_shift must protect the caller's frames."""
+    ref, img = _scene(12), _scene(13)
+    r0, i0 = ref.copy(), img.copy()
+    bu.estimate_shift(ref, img)
+    bu.estimate_shift(ref, img, crop_to_safe_size=False)
+    assert np.array_equal(ref, r0) and np.array_equal(img, i0)

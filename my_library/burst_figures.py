@@ -22,7 +22,7 @@ def plot_frame_vs_average(frame, average, row, col, size, path, title, gamma=2.2
     """Save a side-by-side figure of one crop: a single frame and the burst average.
 
     Attribution: layout based on crop_figures.plot_crop_comparison / Professor James McNames'
-    fig_zippering() (Lecture 7); the display mapping and content are ours.
+    fig_zippering() (Lecture 7).
 
     Both panels use the same crop, the same display window (0.5th to 99.5th percentile of
     the AVERAGE's crop) and the same gamma, drawn with nearest-neighbor so each data pixel

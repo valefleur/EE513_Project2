@@ -91,14 +91,19 @@ if __name__ == "__main__":
           f"skimage |shift| median {np.median(np.hypot(*sk_shifts.T)):.3f} px, "
           f"cv2 |shift| median {np.median(mags):.3f} px.")
     # Which shifts actually line frames up? Score by outcome (RMS to frame 0 on smoothed images).
-    all_shifts = {"cv2 phase corr": shifts, "skimage": np.vstack([[0, 0], sk_shifts]),
+    # The same cv2 call on the full 1512 x 2016 frame (pads to 1536 x 2025, odd width) for contrast.
+    full = np.array([bu.estimate_shift(stack[0], stack[i], crop_to_safe_size=False)[:2] for i in range(1, len(stack))])
+    all_shifts = {"cv2 full frame (biased)": np.vstack([[0, 0], full]), "cv2 phase corr": shifts, "skimage": np.vstack([[0, 0], sk_shifts]),
                   "ECC": np.vstack([[0, 0], np.nan_to_num(ecc_shifts)])}
     none = np.nanmedian(bu.alignment_residuals(stack, np.zeros_like(shifts)))
     print(f"CHECK 02b: median smoothed RMS difference to frame 0 (lower = better aligned); unaligned {none:.5f}")
     for name, sh in all_shifts.items():
         for iname, interp in (("linear", cv2.INTER_LINEAR), ("cubic", cv2.INTER_CUBIC), ("lanczos4", cv2.INTER_LANCZOS4)):
             r = np.nanmedian(bu.alignment_residuals(stack, sh, interp))
-            print(f"          {name:15s} + {iname:8s}: {r:.5f}  ({r / none:.3f} x unaligned)")
+            print(f"          {name:23s} + {iname:8s}: {r:.5f}  ({r / none:.3f} x unaligned)")
+    print(f"CHECK 02c: cv2 on the full frame (odd padded width) median dx {np.median(full[:, 0]):+.3f} px vs "
+          f"on the DFT-safe center crop {np.median(shifts[1:, 0]):+.3f} px vs scikit-image {np.median(sk_shifts[:, 0]):+.3f} px; "
+          f"the +0.5 px difference is cv2's odd-padding bias.")
     print(f"DELIVERABLE {problem:02d}: median shift {np.median(mags):.3f} px, "
           f"largest shift {mags.max():.3f} px (magnitude sqrt(dx^2+dy^2), "
           f"frames 1..{len(stack) - 1} relative to frame 0). "
