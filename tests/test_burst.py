@@ -265,3 +265,51 @@ def test_estimate_shift_does_not_modify_its_inputs():
     bu.estimate_shift(ref, img)
     bu.estimate_shift(ref, img, crop_to_safe_size=False)
     assert np.array_equal(ref, r0) and np.array_equal(img, i0)
+
+
+# ---- streaming average, spread, multi-panel figure, report formatting ------------------------
+def test_average_aligned_matches_apply_shifts_then_mean():
+    st = _noisy_stack(4, 0.02, (120, 160))
+    sh = np.array([(0, 0), (0.3, -0.2), (-0.6, 0.4), (0.1, 0.9)], float)
+    expect = bu.average_burst(bu.apply_shifts(st, sh))
+    assert np.allclose(bu.average_aligned(st, sh), expect, atol=1e-6)
+
+
+def test_half_iqr_is_0p6745_sigma_for_gaussian_and_ignores_nan():
+    x = np.random.default_rng(0).standard_normal(200_000) * 3.0
+    assert abs(bu.half_iqr(x) - 0.6745 * 3.0) < 0.03          # analytic: Q3 - Q1 = 1.349 sigma
+    assert bu.half_iqr(np.append(x, np.nan)) == pytest.approx(bu.half_iqr(x), rel=1e-3)
+
+
+def test_plot_crop_panels_writes_png_and_reports_window(tmp_path):
+    import my_library.burst_figures as bf
+    base = _scene(14, (200, 300))
+    imgs = [base + 0.01, base, np.roll(base, 1, axis=1)]
+    path = str(tmp_path / "p.png")
+    lo, hi, dmax = bf.plot_crop_panels(imgs, ["a", "b", "c"], 20, 30, 64, path, "t", window_from=1, diff_pair=(1, 2))
+    assert (tmp_path / "p.png").stat().st_size > 1000
+    assert lo < hi and dmax > 0
+    lo2, hi2 = bf.plot_frame_vs_average(imgs[0], imgs[1], 20, 30, 64, str(tmp_path / "q.png"), "t")
+    assert (lo2, hi2) == pytest.approx(np.percentile(imgs[1][20:84, 30:94], [0.5, 99.5]))
+
+
+def test_report_table_aligns_columns_and_enforces_width(capsys):
+    import my_library.report as report
+    report.table(["name", "value [px]"], [["a", "1.5"], ["longer name", "22.25"]], indent=2)
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 4 and all(len(l) <= report.WIDTH for l in lines)
+    assert len(lines[2].rstrip()) == len(lines[3].rstrip())            # right-aligned numbers share an edge
+    with pytest.raises(ValueError):
+        report.table(["x" * 60, "y" * 60], [["1", "2"]])
+
+
+def test_report_say_wraps_at_100_and_pm_formats():
+    import io, contextlib
+    import my_library.report as report
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        report.say("word " * 80, indent=2, hang=2)
+    lines = buf.getvalue().splitlines()
+    assert len(lines) > 2 and all(len(l) <= report.WIDTH for l in lines) and lines[1].startswith("    ")
+    assert report.pm(0.0584, 0.0121) == "0.058 \u00b1 0.012" and report.pm(-0.02, None, signed=True) == "-0.020"
+    assert report.pm(0.5, 0.1, 2, signed=True) == "+0.50 \u00b1 0.10"

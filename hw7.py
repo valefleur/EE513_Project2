@@ -7,7 +7,7 @@ Run:  uv run python hw7.py                       # all frames of the burst set b
 Stands alone from Project 2 but calls the same my_library functions the pipeline will use.
 Methods for problems 1-3 (green sites, phase-correlation alignment, averaging) are specified
 by Professor James McNames' EE 513 HW7 assignment; see my_library/burst.py for per-function
-attribution. Notebook code from his Lecture 11/12 demos is   credited where it is used.
+attribution. Notebook code from his Lecture 11/12 demos is credited where it is used.
 """
 import argparse
 import os
@@ -18,6 +18,7 @@ import numpy as np
 import my_library.burst as bu
 import my_library.burst_figures as bf
 import my_library.image_metadata as im
+import my_library.report as report
 from my_library.camera_specs import IPHONE_16_PRO_MAX as cam_spec
 
 INPUT_PATH = "images/iPhone16/Lightroom/"
@@ -61,83 +62,167 @@ if __name__ == "__main__":
 
     stack, info = bu.load_burst_green(paths, SATURATION_DN, which=0, black_level=black_level)
 
-    print(f"burst {burst_path}: ISO {isos}, CFA {info['pattern']}, "
-          f"black {info['black_level']} DN, saturation {info['saturation']} DN")
-    print(f"DELIVERABLE {problem:02d}: {info['n_frames']} frames; one half-size green image is "
-          f"{info['shape'][0]} rows x {info['shape'][1]} columns (raw mosaic {info['raw_shape']}). "
-          f"Value range {stack.min():.4f} to {stack.max():.4f}.")
+    report.say(f"Burst folder: {burst_path}")
+    report.key_values([("ISO", ", ".join(map(str, isos)), ""),
+                   ("Bayer pattern (CFA)", info["pattern"], ""),
+                   ("black level (measured, Project 1)", f"{info['black_level']}", "DN"),
+                   ("saturation (measured, Project 1)", f"{info['saturation']:.0f}", "DN")])
+    report.banner("DELIVERABLE", f"{problem:02d}", "frames and half-size green image")
+    report.key_values([("frames in the burst", f"{info['n_frames']}", ""),
+                   ("height of one half-size image", f"{info['shape'][0]}", "rows"),
+                   ("width of one half-size image", f"{info['shape'][1]}", "columns"),
+                   ("raw mosaic (height x width)", f"{info['raw_shape'][0]} x {info['raw_shape'][1]}", "pixels"),
+                   ("value range after normalization", f"{stack.min():.4f} to {stack.max():.4f}", "(0 = black, 1 = saturation)")])
 
     problem = 2
     print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     """Item 2: align every frame to the first (phase correlation on a Hann-windowed pair,
     then warpAffine back). Report the median and largest shift."""
-    aligned, shifts, responses = bu.align_to_first(stack)
+    n_frames = len(stack)
+    aligned, shifts, responses = bu.align_to_first(stack)           # cv2 on the DFT-safe center crop
+    cv2_shifts = shifts[1:]                                          # frame 0 is the reference
+    mag = lambda v: np.hypot(v[:, 0], v[:, 1])
 
-    # Frame 0 is the reference, so its zero shift is not a measurement; leave it out.
-    mags = np.hypot(shifts[1:, 0], shifts[1:, 1])
-    for i in range(1, len(stack)):
-        print(f"  frame {i:2d}: dx={shifts[i, 0]:+.3f} dy={shifts[i, 1]:+.3f} px "
-              f"|shift|={mags[i - 1]:.3f} px  peak={responses[i]:.3f}")
-    # Real-data cross-checks: two independent estimators, then the outcome score.
-    sk_diff = bu.crosscheck_shifts_skimage(stack, shifts)[1:]
-    sk_shifts = shifts[1:] - sk_diff                      # skimage's own (dx, dy)
-    ecc_shifts = np.array([bu.estimate_shift_ecc(stack[0], stack[i]) for i in range(1, len(stack))])
-    d = lambda p, q: np.abs(p - q)
-    print(f"CHECK 02a: shift disagreement between estimators (px, over dx and dy, frames 1..): "
-          f"cv2-vs-skimage median {np.median(d(shifts[1:], sk_shifts)):.3f} max {d(shifts[1:], sk_shifts).max():.3f}; "
-          f"cv2-vs-ECC median {np.nanmedian(d(shifts[1:], ecc_shifts)):.3f} max {np.nanmax(d(shifts[1:], ecc_shifts)):.3f}; "
-          f"skimage-vs-ECC median {np.nanmedian(d(sk_shifts, ecc_shifts)):.3f} max {np.nanmax(d(sk_shifts, ecc_shifts)):.3f}.")
-    print(f"          ECC |shift| median {np.nanmedian(np.hypot(*ecc_shifts.T)):.3f} px, "
-          f"skimage |shift| median {np.median(np.hypot(*sk_shifts.T)):.3f} px, "
-          f"cv2 |shift| median {np.median(mags):.3f} px.")
-    # Which shifts actually line frames up? Score by outcome (RMS to frame 0 on smoothed images).
-    # The same cv2 call on the full 1512 x 2016 frame (pads to 1536 x 2025, odd width) for contrast.
-    full = np.array([bu.estimate_shift(stack[0], stack[i], crop_to_safe_size=False)[:2] for i in range(1, len(stack))])
-    all_shifts = {"cv2 full frame (biased)": np.vstack([[0, 0], full]), "cv2 phase corr": shifts, "skimage": np.vstack([[0, 0], sk_shifts]),
+    # Independent estimators for cross-checks, plus cv2 on the full frame to expose its bias.
+    sk_shifts = cv2_shifts - bu.crosscheck_shifts_skimage(stack, shifts)[1:]
+    ecc_shifts = np.array([bu.estimate_shift_ecc(stack[0], stack[i]) for i in range(1, n_frames)])
+    full = np.array([bu.estimate_shift(stack[0], stack[i], crop_to_safe_size=False)[:2]
+                     for i in range(1, n_frames)])
+    # Per-frame uncertainty: how far the other two estimators land from cv2 (vector length, px).
+    disagree = np.nanmax([mag(cv2_shifts - sk_shifts), mag(cv2_shifts - ecc_shifts)], axis=0)
+
+    report.say("Shift of each frame relative to frame 0, in pixels (+dx = content moved right, "
+           "+dy = content moved down). cv2 is the assignment's method (DFT-safe crop); scikit-image "
+           "and ECC are independent cross-checks.")
+    rows = [[i + 1, f"{cv2_shifts[i, 0]:+.3f}", f"{cv2_shifts[i, 1]:+.3f}",
+             f"{sk_shifts[i, 0]:+.3f}", f"{sk_shifts[i, 1]:+.3f}",
+             f"{ecc_shifts[i, 0]:+.3f}", f"{ecc_shifts[i, 1]:+.3f}",
+             f"{mag(cv2_shifts[i:i + 1])[0]:.3f}", f"{disagree[i]:.3f}", f"{responses[i + 1]:.3f}"]
+            for i in range(n_frames - 1)]
+    report.table(["frame", "cv2 dx", "cv2 dy", "sk dx", "sk dy", "ECC dx", "ECC dy", "|cv2|", "spread", "peak"],
+             rows, indent=2, left=())
+    report.say("Units: px. |cv2| = length of cv2's shift; spread = largest disagreement of scikit-image or "
+           "ECC from cv2; peak = cv2 correlation peak (unitless).", indent=2)
+
+    report.banner("CHECK", "02a", "do three independent estimators agree?")
+    report.table(["estimator pair", "median |difference| [px]", "largest |difference| [px]"], [
+        ["cv2 vs scikit-image", f"{np.median(mag(cv2_shifts - sk_shifts)):.3f}", f"{mag(cv2_shifts - sk_shifts).max():.3f}"],
+        ["cv2 vs ECC", f"{np.nanmedian(mag(cv2_shifts - ecc_shifts)):.3f}", f"{np.nanmax(mag(cv2_shifts - ecc_shifts)):.3f}"],
+        ["scikit-image vs ECC", f"{np.nanmedian(mag(sk_shifts - ecc_shifts)):.3f}", f"{np.nanmax(mag(sk_shifts - ecc_shifts)):.3f}"]])
+    print()
+    report.table(["estimator", "median |shift| " + report.PM + " half-IQR over frames [px]"], [
+        ["cv2 (DFT-safe crop)", report.pm(np.median(mag(cv2_shifts)), bu.half_iqr(mag(cv2_shifts)))],
+        ["scikit-image", report.pm(np.median(mag(sk_shifts)), bu.half_iqr(mag(sk_shifts)))],
+        ["ECC", report.pm(np.nanmedian(mag(ecc_shifts)), bu.half_iqr(mag(ecc_shifts)))]])
+
+    report.banner("CHECK", "02b", "which shifts line the frames up best?")
+    report.say("Score = RMS difference to frame 0 after undoing the shifts, on Gaussian-smoothed images "
+           "(linear light, 0-1 scale). Lower is better; the " + report.PM + " is half the interquartile range "
+           "over frames. 'Biased' = cv2 on the full frame without the DFT-safe crop.", indent=2)
+    none = bu.alignment_residuals(stack, np.zeros_like(shifts))
+    rows = [["no alignment", "-", report.pm(np.nanmedian(none), bu.half_iqr(none), 5), "1.000"]]
+    all_shifts = {"cv2, full frame (biased)": np.vstack([[0, 0], full]),
+                  "cv2, DFT-safe crop": shifts,
+                  "scikit-image": np.vstack([[0, 0], sk_shifts]),
                   "ECC": np.vstack([[0, 0], np.nan_to_num(ecc_shifts)])}
-    none = np.nanmedian(bu.alignment_residuals(stack, np.zeros_like(shifts)))
-    print(f"CHECK 02b: median smoothed RMS difference to frame 0 (lower = better aligned); unaligned {none:.5f}")
     for name, sh in all_shifts.items():
-        for iname, interp in (("linear", cv2.INTER_LINEAR), ("cubic", cv2.INTER_CUBIC), ("lanczos4", cv2.INTER_LANCZOS4)):
-            r = np.nanmedian(bu.alignment_residuals(stack, sh, interp))
-            print(f"          {name:23s} + {iname:8s}: {r:.5f}  ({r / none:.3f} x unaligned)")
-    print(f"CHECK 02c: cv2 on the full frame (odd padded width) median dx {np.median(full[:, 0]):+.3f} px vs "
-          f"on the DFT-safe center crop {np.median(shifts[1:, 0]):+.3f} px vs scikit-image {np.median(sk_shifts[:, 0]):+.3f} px; "
-          f"the +0.5 px difference is cv2's odd-padding bias.")
-    print(f"DELIVERABLE {problem:02d}: median shift {np.median(mags):.3f} px, "
-          f"largest shift {mags.max():.3f} px (magnitude sqrt(dx^2+dy^2), "
-          f"frames 1..{len(stack) - 1} relative to frame 0). "
-          f"Weakest correlation peak {np.nanmin(responses):.3f} vs median {np.nanmedian(responses):.3f}.")
+        for iname, interp in (("linear", cv2.INTER_LINEAR), ("cubic", cv2.INTER_CUBIC),
+                              ("lanczos4", cv2.INTER_LANCZOS4)):
+            r = bu.alignment_residuals(stack, sh, interp)
+            rows.append([name, iname, report.pm(np.nanmedian(r), bu.half_iqr(r), 5),
+                         f"{np.nanmedian(r) / np.nanmedian(none):.3f}"])
+        rows.append(None)
+    report.table(["shifts from", "interpolation", "RMS difference " + report.PM + " spread", "vs. unaligned"],
+             rows[:-1], indent=4, left=(0, 1))
+
+    report.banner("CHECK", "02c", "cv2's odd-padded-size bias on this burst")
+    rows = [[name, report.pm(np.median(s[:, 0]), bu.half_iqr(s[:, 0]), signed=True),
+             report.pm(np.median(s[:, 1]), bu.half_iqr(s[:, 1]), signed=True)]
+            for name, s in (("cv2, full frame (pads to odd width)", full), ("cv2, DFT-safe crop", cv2_shifts),
+                            ("scikit-image", sk_shifts), ("ECC", ecc_shifts))]
+    report.table(["method", "median dx " + report.PM + " half-IQR [px]", "median dy " + report.PM + " half-IQR [px]"], rows)
+    bias = np.median(full[:, 0]) - np.median(cv2_shifts[:, 0])
+    report.say(f"On the full frame cv2's dx is {bias:+.3f} px away from its own DFT-safe-crop dx; a difference near "
+           "+0.5 px is cv2's odd-padding bias (the half-size green width 2016 pads to 2025), not motion.", indent=2)
+
+    report.banner("DELIVERABLE", f"{problem:02d}", f"shift of frames 1..{n_frames - 1} relative to frame 0")
+    worst = int(np.argmax(mag(cv2_shifts)))
+    report.key_values([
+        ("median shift", report.pm(np.median(mag(cv2_shifts)), float(np.median(disagree))), "px"),
+        ("largest shift", report.pm(mag(cv2_shifts)[worst], float(disagree[worst])), f"px (frame {worst + 1})"),
+        ("weakest cv2 correlation peak", f"{np.nanmin(responses):.3f}", f"(median {np.nanmedian(responses):.3f}, unitless)")])
+    report.say(f"Shift = length sqrt(dx^2 + dy^2) of cv2's estimate on the DFT-safe crop. " + report.PM + " = "
+           "disagreement of scikit-image and ECC with cv2 (median over frames for the median; at that "
+           "frame for the largest). It is an estimator spread, not a statistical error bar.", indent=2)
 
     problem = 3
     print(f"\n*~*~*~*~*~*~*~*~*~*~ Problem {problem} ~*~*~*~*~*~*~*~*~*~*")
     """Item 3: average the aligned frames (the clean image) and show one frame next to the
     average, same crop, same display scale, somewhere with fine detail."""
     average = bu.average_burst(aligned)
-    margin = bu.valid_margin(shifts)                 # keep reflected-border fill out of the crop
+    biased_shifts = np.vstack([[0, 0], full])                        # cv2 on the full frame
+    average_biased = bu.average_aligned(stack, biased_shifts)
+    margin = max(bu.valid_margin(shifts), bu.valid_margin(biased_shifts))   # same crop valid for both
     crop_size = 256
     row, col = bu.find_detail_crop(average, crop_size, margin)
+    burst_name = burst_path.rstrip("/").split("/")[-1]
+    fig1 = f"{OUTPUT_PATH}p{problem:02d}_frame_vs_average.png"
+    fig2 = f"{OUTPUT_PATH}p{problem:02d}_dft_safe_crop_comparison.png"
     lo, hi = bf.plot_frame_vs_average(
-        stack[0], average, row, col, crop_size,
-        f"{OUTPUT_PATH}p{problem:02d}_frame_vs_average.png",
-        f"HW7 problem 3: one frame vs the average of {len(stack)} aligned frames "
-        f"({burst_path.rstrip('/').split('/')[-1]})", show=SHOW)
+        stack[0], average, row, col, crop_size, fig1,
+        f"HW7 problem 3: one frame vs the average of {n_frames} aligned frames ({burst_name})", show=SHOW)
+    _, _, dmax = bf.plot_crop_panels(
+        [stack[0], average, average_biased],
+        ["single frame (frame 0)", "average, DFT-safe cv2 shifts", "average, full-frame cv2 shifts (biased)"],
+        row, col, crop_size, fig2,
+        f"HW7 problem 3: effect of the DFT-safe crop on the {n_frames}-frame average ({burst_name})",
+        window_from=1, diff_pair=(1, 2), show=SHOW)
 
-    # Real-data checks (not just synthetic unit tests).
     sl = (slice(row, row + crop_size), slice(col, col + crop_size))
-    sigma_t = np.sqrt(stack[:, sl[0], sl[1]].astype(np.float64).var(axis=0, ddof=1)).mean() # average of the sqrt of the variation on the crop
-    resid = stack[0][sl] - average[sl]
-    print(f"CHECK 03a: crop noise std of (frame 0 - average) {resid.std():.5f}; prediction from the "
-          f"temporal std of the raw frames {sigma_t:.5f} x sqrt(1-1/N) = {sigma_t * np.sqrt(1 - 1 / len(stack)):.5f}. "
-          f"(Temporal std also contains drift and misregistration, so it can only over-predict.)")
+    n_pix = crop_size ** 2
+    rel = 1 / np.sqrt(2 * (n_pix - 1))                               # relative error of a std, indep. pixels
+    sigma_t = np.sqrt(stack[:, sl[0], sl[1]].astype(np.float64).var(axis=0, ddof=1)).mean()
+    meas = (stack[0][sl] - average[sl]).std()
+    pred = sigma_t * np.sqrt(1 - 1 / n_frames)
+
+    report.banner("CHECK", "03a", "noise left after averaging, in the detail crop")
+    report.table(["quantity (linear light, 0-1)", "value " + report.PM + " stat. [unitless]"], [
+        ["std of (frame 0 - average)", report.pm(meas, meas * rel, 5)],
+        ["predicted: temporal std x sqrt(1 - 1/N)", report.pm(pred, pred * rel, 5)],
+        ["measured / predicted", f"{meas / pred:.2f}"]])
+    report.say(f"Temporal std = mean over crop pixels of the std across the {n_frames} raw frames. " + report.PM +
+           f" counts only the {n_pix} crop pixels (assumes independent pixels). A ratio above 1 means frame 0 "
+           "differs from the average by more than noise (e.g. frame 0 is the only unwarped frame, and this crop "
+           "was chosen for fine detail).", indent=2)
+
     ratios = bu.half_split_noise_check(aligned, margin)
-    print(f"CHECK 03b: measured/predicted variance of (mean of half A - mean of half B), 1.0 = pure "
-          f"independent noise: even/odd {ratios['even_odd']:.2f}, first/second half {ratios['first_second']:.2f}. "
-          f"A first/second value well above even/odd means the scene or exposure drifted during the burst.")
+    n_in = (aligned.shape[1] - 2 * margin) * (aligned.shape[2] - 2 * margin)
+    rel_v = np.sqrt(2 / n_in)
+    report.banner("CHECK", "03b", "does averaging behave like independent noise?")
+    report.table(["split of the burst into two halves", "measured / predicted variance " + report.PM + " stat."], [
+        ["even frames vs odd frames", report.pm(ratios["even_odd"], ratios["even_odd"] * rel_v, 2)],
+        ["first half vs second half", report.pm(ratios["first_second"], ratios["first_second"] * rel_v, 2)]])
+    gap = ratios["first_second"] > 1.3 * ratios["even_odd"]
+    report.say("1.00 = pure independent noise. The " + report.PM + " counts only image pixels, so it is tiny; the real "
+           "uncertainty is systematic. " + (
+               "The first half differs from the second more than noise explains (the first/second ratio is well "
+               "above even/odd), so something changed during the burst. Not investigated further; cite it in the "
+               "write-up." if gap else "Both splits agree, so no change during the burst is detected."), indent=2)
+
     gains = bu.frame_gains(stack, margin)
-    trend = np.polyfit(np.arange(len(gains)), gains, 1)[0] * (len(gains) - 1)
-    print(f"CHECK 03c: mean level of each frame relative to frame 0: min {gains.min():.4f}, max {gains.max():.4f}, "
-          f"linear trend over the burst {trend:+.4f}. Per frame: " + " ".join(f"{g:.4f}" for g in gains))
-    print(f"DELIVERABLE {problem:02d}: figure {OUTPUT_PATH}p{problem:02d}_frame_vs_average.png "
-          f"(crop rows {row}:{row + crop_size}, cols {col}:{col + crop_size}; display window {lo:.4f}-{hi:.4f}, "
-          f"gamma 2.2; N={len(stack)}).")
+    (slope, _), cov = np.polyfit(np.arange(n_frames), gains, 1, cov=True)
+    report.banner("CHECK", "03c", "mean level of each frame relative to frame 0 (1.0000 = same brightness)")
+    report.grid("frame", list(gains), per_row=10)
+    report.key_values([("lowest", f"{gains.min():.4f}", ""), ("highest", f"{gains.max():.4f}", ""),
+                   ("linear trend over the burst", report.pm(slope * (n_frames - 1), np.sqrt(cov[0, 0]) * (n_frames - 1), 4, True),
+                    "(fraction; " + report.PM + " from straight-line fit scatter)")], indent=4)
+
+    d_rms = np.sqrt(np.mean((average[sl] - average_biased[sl]) ** 2))
+    report.banner("DELIVERABLE", f"{problem:02d}", "frame vs average figures")
+    print(f"    figure 1 (frame vs average)               {fig1}")
+    print(f"    figure 2 (DFT-safe vs full-frame crop)    {fig2}\n")
+    report.key_values([("crop (rows, columns)", f"{row}:{row + crop_size}, {col}:{col + crop_size}", "half-size green pixels"),
+                   ("display window", f"{lo:.4f} to {hi:.4f}", "linear light (gamma 2.2)"),
+                   ("frames averaged", f"{n_frames}", ""),
+                   ("RMS difference between the two averages", f"{d_rms:.5f}", "linear light, in the crop"),
+                   ("figure 2 difference-panel scale", f"+/-{dmax:.5f}", "linear light")])

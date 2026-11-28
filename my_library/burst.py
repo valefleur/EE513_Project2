@@ -168,6 +168,26 @@ def apply_shifts(stack, shifts, interpolation=cv2.INTER_LINEAR):
     return aligned
 
 
+def average_aligned(stack, shifts, interpolation=cv2.INTER_LINEAR):
+    """Per-pixel mean of the frames after undoing `shifts`, without storing the aligned stack.
+
+    Same result as average_burst(apply_shifts(stack, shifts)) but accumulates frame by frame
+    in float64, so a second alignment variant costs one image of memory instead of N.
+    """
+    acc = np.zeros(stack.shape[1:], np.float64)
+    for frame, (dx, dy) in zip(stack, shifts):
+        acc += frame if (dx == 0 and dy == 0) else undo_shift(frame, dx, dy, interpolation)
+    return acc / len(stack)
+
+
+def half_iqr(x):
+    """Half the interquartile range of x, ignoring NaNs: a robust 'typical spread' for
+    frame-to-frame variability. For Gaussian data it equals 0.6745 standard deviations
+    (multiply by 1.4826 to estimate sigma)."""
+    q1, q3 = np.nanpercentile(x, [25, 75])
+    return float((q3 - q1) / 2)
+
+
 def align_to_first(stack, interpolation=cv2.INTER_LINEAR):
     """Align every frame of a (N, H, W) float stack to frame 0.
 
